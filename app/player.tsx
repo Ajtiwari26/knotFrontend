@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, Image, TouchableOpacity, Dimensions } from 'react-native';
+import { View, Text, StyleSheet, Image, TouchableOpacity, Dimensions, Share } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { ChevronDown, Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Heart, ListMusic, Share2, Scissors, X } from 'lucide-react-native';
@@ -12,6 +12,7 @@ import { AudioService } from '@/src/services/AudioService';
 import { KnotService } from '@/src/services/KnotService';
 import TrackPlayer, { useProgress, State, usePlaybackState, useActiveTrack } from 'react-native-track-player';
 import { RopeSeekbar, Knot } from '@/src/components/RopeSeekbar';
+import { useLibraryStore } from '@/src/store/libraryStore';
 
 const { width } = Dimensions.get('window');
 const ART_SIZE = width - 110;
@@ -44,7 +45,19 @@ export default function PlayerScreen() {
   }, [currentTrack, activeTrack]);
   
   const { position, duration } = useProgress(250);
-  const [liked, setLiked] = useState(false);
+  
+  const library = useLibraryStore();
+  const trackId = currentTrack ? (currentTrack.source === 'youtube' ? currentTrack.youtube_id : currentTrack.local_uri) : '';
+  const liked = library.isLiked(trackId || '');
+
+  const toggleLike = () => {
+    if (!currentTrack || !trackId) return;
+    if (liked) {
+      library.removeLikedSong(trackId);
+    } else {
+      library.addLikedSong(currentTrack);
+    }
+  };
 
   // Multi-knot state
   const [knots, setKnots] = useState<Knot[]>([]);
@@ -98,6 +111,48 @@ export default function PlayerScreen() {
   const handlePlayPause = async () => {
     await AudioService.togglePlayPause();
   };
+
+  const handleNext = async () => {
+    usePlayerStore.getState().nextTrack();
+    const newTrack = usePlayerStore.getState().currentTrack;
+    if (newTrack) {
+      await AudioService.playQueueTrack(newTrack);
+    }
+  };
+
+  const handlePrev = async () => {
+    usePlayerStore.getState().prevTrack();
+    const newTrack = usePlayerStore.getState().currentTrack;
+    if (newTrack) {
+      await AudioService.playQueueTrack(newTrack);
+    }
+  };
+
+  const toggleShuffle = () => {
+    const s = usePlayerStore.getState();
+    s.setShuffle(!s.shuffle);
+  };
+
+  const toggleRepeat = () => {
+    const s = usePlayerStore.getState();
+    const modes: ('off' | 'track' | 'list')[] = ['off', 'track', 'list'];
+    const nextMode = modes[(modes.indexOf(s.repeatMode) + 1) % modes.length];
+    s.setRepeatMode(nextMode);
+  };
+
+  const shareTrack = async () => {
+    if (!currentTrack) return;
+    try {
+      await Share.share({
+        message: `Listen to ${currentTrack.title} by ${currentTrack.artist} on Knot!`,
+      });
+    } catch (error) {
+      console.error('Error sharing track:', error);
+    }
+  };
+
+  const shuffle = usePlayerStore(s => s.shuffle);
+  const repeatMode = usePlayerStore(s => s.repeatMode);
 
   const handleSeek = (pos: number) => {
     AudioService.seekTo(pos);
@@ -230,7 +285,7 @@ export default function PlayerScreen() {
 
       {/* Album Art */}
       <View style={s.artWrap}>
-        <Image source={{ uri: currentTrack.thumbnail || 'https://i.ytimg.com/vi/0JCLpa-r4Lg/hqdefault.jpg' }} style={s.art} />
+        <Image source={currentTrack.thumbnail ? { uri: currentTrack.thumbnail } : require('@/assets/icon.png')} style={s.art} />
       </View>
 
       {/* Track Info */}
@@ -240,7 +295,7 @@ export default function PlayerScreen() {
             <Text style={s.title} numberOfLines={1}>{currentTrack.title || 'Unknown Track'}</Text>
             <Text style={s.artist} numberOfLines={1}>{currentTrack.artist || 'Unknown Artist'}</Text>
           </View>
-          <TouchableOpacity onPress={() => setLiked(!liked)}>
+          <TouchableOpacity onPress={toggleLike}>
             <Heart size={24} color={colors.primary} fill={liked ? colors.primary : 'transparent'} />
           </TouchableOpacity>
         </View>
@@ -326,20 +381,29 @@ export default function PlayerScreen() {
 
       {/* Transport Controls */}
       <View style={s.controls}>
-        <TouchableOpacity style={s.sideControl}><Shuffle size={20} color={colors.textSecondary} /></TouchableOpacity>
-        <TouchableOpacity style={s.skipBtn} onPress={() => TrackPlayer.skipToPrevious()}><SkipBack size={28} color={colors.text} fill={colors.text} /></TouchableOpacity>
+        <TouchableOpacity style={s.sideControl} onPress={toggleShuffle}>
+          <Shuffle size={20} color={shuffle ? colors.primary : colors.textSecondary} />
+        </TouchableOpacity>
+        <TouchableOpacity style={s.skipBtn} onPress={handlePrev}>
+          <SkipBack size={28} color={colors.text} fill={colors.text} />
+        </TouchableOpacity>
         <TouchableOpacity style={s.playBtn} onPress={handlePlayPause}>
           <LinearGradient colors={[colors.gradientStart, colors.gradientEnd]} style={s.playGradient}>
             {isPlaying ? <Pause size={32} color={colors.onPrimary} fill={colors.onPrimary} /> : <Play size={32} color={colors.onPrimary} fill={colors.onPrimary} />}
           </LinearGradient>
         </TouchableOpacity>
-        <TouchableOpacity style={s.skipBtn} onPress={() => TrackPlayer.skipToNext()}><SkipForward size={28} color={colors.text} fill={colors.text} /></TouchableOpacity>
-        <TouchableOpacity style={s.sideControl}><Repeat size={20} color={colors.textSecondary} /></TouchableOpacity>
+        <TouchableOpacity style={s.skipBtn} onPress={handleNext}>
+          <SkipForward size={28} color={colors.text} fill={colors.text} />
+        </TouchableOpacity>
+        <TouchableOpacity style={s.sideControl} onPress={toggleRepeat}>
+          <Repeat size={20} color={repeatMode !== 'off' ? colors.primary : colors.textSecondary} />
+          {repeatMode === 'track' && <Text style={{ position: 'absolute', color: colors.primary, fontSize: 10, fontWeight: 'bold' }}>1</Text>}
+        </TouchableOpacity>
       </View>
 
       {/* Bottom Actions */}
       <View style={s.bottomActions}>
-        <TouchableOpacity><Share2 size={20} color={colors.textSecondary} /></TouchableOpacity>
+        <TouchableOpacity onPress={shareTrack}><Share2 size={20} color={colors.textSecondary} /></TouchableOpacity>
         <TouchableOpacity onPress={() => router.push('/queue')}><ListMusic size={20} color={colors.textSecondary} /></TouchableOpacity>
       </View>
     </SafeAreaView>

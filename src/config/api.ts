@@ -10,8 +10,24 @@ let _resolvedBaseUrl: string | null = null;
 export async function resolveBaseUrl(): Promise<string> {
   if (_resolvedBaseUrl) return _resolvedBaseUrl;
 
-  // Enforce production URL directly
-  console.log('[API] Forcing production URL:', PRODUCTION_URL);
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 2000); // 2s timeout for local check
+    const res = await fetch(`${LOCAL_URL}/api/health`, {
+      method: 'GET',
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (res.ok) {
+      console.log('[API] Using local backend:', LOCAL_URL);
+      _resolvedBaseUrl = LOCAL_URL;
+      return _resolvedBaseUrl;
+    }
+  } catch (e) {
+    console.warn('[API] Local backend probe failed, falling back to production.');
+  }
+
+  console.log('[API] Using production URL:', PRODUCTION_URL);
   _resolvedBaseUrl = PRODUCTION_URL;
   return _resolvedBaseUrl;
 }

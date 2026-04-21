@@ -10,7 +10,7 @@ import { Chip } from '@/src/components/Chip';
 import { TrackItem } from '@/src/components/TrackItem';
 import { resolveBaseUrl } from '@/src/config/api';
 import { AudioService } from '@/src/services/AudioService';
-import { usePlayerStore } from '@/src/store/playerStore';
+import { usePlayerStore, Track } from '@/src/store/playerStore';
 
 const FILTERS = ['All', 'Tracks', 'Artists', 'Knots'];
 
@@ -22,6 +22,7 @@ export default function SearchResultsScreen() {
   const [loading, setLoading] = useState(false);
   const setCurrentTrack = usePlayerStore(state => state.setCurrentTrack);
   const setIsPlaying = usePlayerStore(state => state.setIsPlaying);
+  const setQueue = usePlayerStore(state => state.setQueue);
 
   useEffect(() => {
     if (query.trim().length > 2) {
@@ -46,7 +47,7 @@ export default function SearchResultsScreen() {
     }
   };
 
-  const handlePlay = async (track: any) => {
+  const handlePlay = async (track: any, index: number) => {
     try {
       const baseUrl = await resolveBaseUrl();
       console.log(`[Play] Fetching stream URL for ${track.youtube_id} from ${baseUrl}`);
@@ -60,18 +61,18 @@ export default function SearchResultsScreen() {
         throw new Error(errorMsg);
       }
       
-      const trackData = {
-        youtube_id: track.youtube_id,
+      const queueTracks: Track[] = results.map(r => ({
+        youtube_id: r.youtube_id,
         source: 'youtube' as const,
-        title: track.title,
-        artist: track.artist,
-        thumbnail: track.thumbnail,
-        duration_ms: track.duration_ms,
-        streamUrl: data.streamUrl
-      };
+        title: r.title,
+        artist: r.artist,
+        thumbnail: r.thumbnail,
+        duration_ms: r.duration_ms,
+      }));
+      queueTracks[index].streamUrl = data.streamUrl;
       
       console.log('[Play] Starting playback...', track.title);
-      setCurrentTrack(trackData);
+      setQueue(queueTracks, index);
       setIsPlaying(true);
       await AudioService.playStream(data.streamUrl, track.title, track.artist, track.thumbnail);
       router.push('/player');
@@ -101,7 +102,7 @@ export default function SearchResultsScreen() {
         ) : (
           <>
             <Text style={s.count}>{results.length} results for "{query}"</Text>
-            {results.map(r => (
+            {results.map((r, i) => (
               <TrackItem 
                 key={r.youtube_id} 
                 title={r.title} 
@@ -109,7 +110,7 @@ export default function SearchResultsScreen() {
                 thumbnail={r.thumbnail} 
                 duration={Math.floor(r.duration_ms / 60000) + ':' + String(Math.floor((r.duration_ms % 60000) / 1000)).padStart(2, '0')} 
                 showMore 
-                onPress={() => handlePlay(r)} 
+                onPress={() => handlePlay(r, i)} 
               />
             ))}
           </>

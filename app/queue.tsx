@@ -8,15 +8,29 @@ import { typography } from '@/src/theme/typography';
 import { spacing, borderRadius } from '@/src/theme/spacing';
 import { TrackItem } from '@/src/components/TrackItem';
 
-const QUEUE = [
-  { id: 'q1', title: 'Kitne Bechain Hoke', artist: 'Alka Yagnik', thumbnail: 'https://i.ytimg.com/vi/0JCLpa-r4Lg/hqdefault.jpg', duration: '4:32', active: true },
-  { id: 'q2', title: 'Never Gonna Give You Up', artist: 'Rick Astley', thumbnail: 'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg', duration: '3:33' },
-  { id: 'q3', title: 'Blinding Lights', artist: 'The Weeknd', thumbnail: 'https://i.ytimg.com/vi/4NRXx6U8ABQ/hqdefault.jpg', duration: '3:20' },
-  { id: 'q4', title: 'Shape of You', artist: 'Ed Sheeran', thumbnail: 'https://i.ytimg.com/vi/JGwWNGJdvx8/hqdefault.jpg', duration: '3:54' },
-];
+import { usePlayerStore } from '@/src/store/playerStore';
+import { AudioService } from '@/src/services/AudioService';
+
+// Function to format duration in ms to mm:ss
+const formatDuration = (ms: number) => {
+  const totalSeconds = Math.floor(ms / 1000);
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  return `${m}:${s.toString().padStart(2, '0')}`;
+};
 
 export default function QueueScreen() {
   const router = useRouter();
+  const queue = usePlayerStore(state => state.queue);
+  const currentTrack = usePlayerStore(state => state.currentTrack);
+  const currentIndex = usePlayerStore(state => state.currentIndex);
+  
+  const clearQueue = () => {
+    usePlayerStore.getState().setQueue([], -1);
+  };
+  
+  const upNext = queue.slice(currentIndex + 1);
+
   return (
     <SafeAreaView style={s.safe}>
       <View style={s.header}>
@@ -25,18 +39,35 @@ export default function QueueScreen() {
       </View>
 
       <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
-        <Text style={s.sectionLabel}>NOW PLAYING</Text>
-        <View style={s.nowPlaying}>
-          <TrackItem title={QUEUE[0].title} artist={QUEUE[0].artist} thumbnail={QUEUE[0].thumbnail} duration={QUEUE[0].duration} knotBadge="No Intro Knot" />
-        </View>
+        {currentTrack && (
+          <>
+            <Text style={s.sectionLabel}>NOW PLAYING</Text>
+            <View style={s.nowPlaying}>
+              <TrackItem 
+                title={currentTrack.title} 
+                artist={currentTrack.artist} 
+                thumbnail={currentTrack.thumbnail || ''} 
+                duration={formatDuration(currentTrack.duration_ms)} 
+                knotBadge="No Intro Knot" 
+              />
+            </View>
+          </>
+        )}
 
         <View style={s.upNextHeader}>
-          <Text style={s.sectionLabel}>QUEUE</Text>
-          <TouchableOpacity><Text style={s.clearText}>Clear</Text></TouchableOpacity>
+          <Text style={s.sectionLabel}>QUEUE ({upNext.length})</Text>
+          <TouchableOpacity onPress={clearQueue}><Text style={s.clearText}>Clear</Text></TouchableOpacity>
         </View>
 
-        {QUEUE.slice(1).map(t => (
-          <TrackItem key={t.id} title={t.title} artist={t.artist} thumbnail={t.thumbnail} duration={t.duration} showMore />
+        {upNext.map((t, idx) => (
+          <TrackItem 
+            key={`${t.source === 'youtube' ? t.youtube_id : t.local_uri}-${idx}`} 
+            title={t.title} 
+            artist={t.artist} 
+            thumbnail={t.thumbnail || ''} 
+            duration={formatDuration(t.duration_ms)} 
+            showMore 
+          />
         ))}
       </ScrollView>
     </SafeAreaView>

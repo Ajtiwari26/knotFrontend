@@ -15,11 +15,12 @@ export interface KnotSegment {
   y2: number;
   t1: number;
   t2: number;
+  isLoose?: boolean;
 }
 
 const { width: SCREEN_W } = Dimensions.get('window');
-const SLIDER_W = SCREEN_W - 48;
-const ROPE_Y = 40;
+const SLIDER_W = SCREEN_W - 42;
+const ROPE_Y = 28;
 
 export type HitZone = 'loop' | 'active_knot' | 'loose_rope' | 'rope';
 
@@ -50,10 +51,32 @@ export const KnotEngine = {
    * Maps a time (in seconds) to a visual X coordinate on the rope.
    */
   timeToVisualX: (time: number, segs: KnotSegment[], _totalDuration: number) => {
+    // Exact match or within segment
     const seg = segs.find(s => time >= s.t1 && time <= s.t2);
-    if (!seg) return 0;
-    const ratio = (time - seg.t1) / (seg.t2 - seg.t1 || 1);
-    return seg.x1 + ratio * (seg.x2 - seg.x1);
+    if (seg) {
+      const ratio = (time - seg.t1) / (seg.t2 - seg.t1 || 1);
+      return seg.x1 + ratio * (seg.x2 - seg.x1);
+    }
+
+    // If time is in a gap (active knot), find the segment that ends at or after this time
+    // We sort segs by t1 just in case, though they usually are.
+    const sortedSegs = [...segs].sort((a, b) => a.t1 - b.t1);
+    
+    // If time is before the first segment
+    if (sortedSegs.length > 0 && time < sortedSegs[0].t1) {
+      return sortedSegs[0].x1;
+    }
+
+    // Find the segment immediately following the gap
+    const nextSeg = sortedSegs.find(s => s.t1 >= time);
+    if (nextSeg) return nextSeg.x1; // This is the tieX where the knot is bunched
+
+    // If time is after the last segment
+    if (sortedSegs.length > 0) {
+      return sortedSegs[sortedSegs.length - 1].x2;
+    }
+
+    return 0;
   },
 
   /**

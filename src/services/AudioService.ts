@@ -84,4 +84,32 @@ export class AudioService {
   static async seekTo(position: number) {
     await TrackPlayer.seekTo(position);
   }
+
+  static async playQueueTrack(track: any) {
+    if (!this.isSetup) await this.setupPlayer();
+
+    if (track.source === 'local') {
+      await this.playLocal(track.local_uri, track.title, track.artist, track.thumbnail);
+    } else {
+      let streamUrl = track.streamUrl;
+      if (!streamUrl) {
+        // Fetch it!
+        try {
+          const { resolveBaseUrl } = require('@/src/config/api');
+          const baseUrl = await resolveBaseUrl();
+          const res = await fetch(`${baseUrl}/api/songs/${track.youtube_id}/stream-url`);
+          const data = await res.json();
+          if (res.ok && data.streamUrl) {
+            streamUrl = data.streamUrl;
+          } else {
+            throw new Error(data.error || 'Failed to fetch stream URL');
+          }
+        } catch (e) {
+          console.error('[AudioService] Error fetching stream URL', e);
+          return; // Can't play
+        }
+      }
+      await this.playStream(streamUrl, track.title, track.artist, track.thumbnail);
+    }
+  }
 }

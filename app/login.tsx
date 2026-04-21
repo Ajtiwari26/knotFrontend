@@ -52,9 +52,14 @@ export default function LoginScreen() {
       // Fully offline guest login - bypasses backend check
       const dummyToken = 'guest-token-' + Date.now();
       const dummyUser = {
+        _id: 'guest',
         id: 'guest',
         email: 'guest@knot.local',
         name: 'Guest User',
+        displayName: 'Guest User',
+        avatar: '',
+        bio: 'Guest user',
+        isGuest: true,
       };
       
       setAuth(dummyToken, dummyUser, true);

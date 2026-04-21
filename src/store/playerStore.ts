@@ -29,20 +29,75 @@ interface PlayerState {
   currentTrack: Track | null;
   activeKnot: ActiveKnot | null;
   isPlaying: boolean;
+  queue: Track[];
+  currentIndex: number;
+  repeatMode: 'off' | 'track' | 'list';
+  shuffle: boolean;
   
   setCurrentTrack: (track: Track | null) => void;
   setActiveKnot: (knot: ActiveKnot | null) => void;
   setIsPlaying: (isPlaying: boolean) => void;
+  setQueue: (queue: Track[], startIndex?: number) => void;
+  setRepeatMode: (mode: 'off' | 'track' | 'list') => void;
+  setShuffle: (shuffle: boolean) => void;
+  nextTrack: () => void;
+  prevTrack: () => void;
   reset: () => void;
 }
 
-export const usePlayerStore = create<PlayerState>((set) => ({
+export const usePlayerStore = create<PlayerState>((set, get) => ({
   currentTrack: null,
   activeKnot: null,
   isPlaying: false,
+  queue: [],
+  currentIndex: 0,
+  repeatMode: 'off',
+  shuffle: false,
   
   setCurrentTrack: (track) => set({ currentTrack: track }),
   setActiveKnot: (knot) => set({ activeKnot: knot }),
   setIsPlaying: (isPlaying) => set({ isPlaying }),
-  reset: () => set({ currentTrack: null, activeKnot: null, isPlaying: false }),
+  
+  setQueue: (queue, startIndex = 0) => {
+    set({ queue, currentIndex: startIndex, currentTrack: queue[startIndex] || null });
+  },
+  
+  setRepeatMode: (mode) => set({ repeatMode: mode }),
+  setShuffle: (shuffle) => set({ shuffle }),
+  
+  nextTrack: () => {
+    const { queue, currentIndex, repeatMode, shuffle } = get();
+    if (queue.length === 0) return;
+    
+    if (repeatMode === 'track') {
+      // Stay on same track
+      return;
+    }
+    
+    let nextIndex = currentIndex + 1;
+    if (shuffle) {
+      nextIndex = Math.floor(Math.random() * queue.length);
+    } else if (nextIndex >= queue.length) {
+      nextIndex = repeatMode === 'list' ? 0 : currentIndex; // Stop at end if not repeating list
+    }
+    
+    set({ currentIndex: nextIndex, currentTrack: queue[nextIndex] });
+  },
+  
+  prevTrack: () => {
+    const { queue, currentIndex } = get();
+    if (queue.length === 0) return;
+    
+    let prevIndex = currentIndex - 1;
+    if (prevIndex < 0) {
+      prevIndex = 0;
+    }
+    
+    set({ currentIndex: prevIndex, currentTrack: queue[prevIndex] });
+  },
+  
+  reset: () => set({ 
+    currentTrack: null, activeKnot: null, isPlaying: false, 
+    queue: [], currentIndex: 0, repeatMode: 'off', shuffle: false 
+  }),
 }));

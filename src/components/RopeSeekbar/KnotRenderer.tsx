@@ -1,9 +1,9 @@
 import React from 'react';
 import { Path, G, Circle, Ellipse } from 'react-native-svg';
 
-const THICK = 12;
-const LOOP_THICK = 9;
-const STRAND_W = 7;
+const THICK = 6;
+const LOOP_THICK = 18;
+const STRAND_W = 11;
 
 // ───────────────────────────────────────────────────────────
 // ROPE TEXTURE — twisted strand marks along straight or curved paths
@@ -13,9 +13,9 @@ export function ropeTexture(
   isSagging = false, sagDepth = 0
 ): React.ReactElement[] {
   const els: React.ReactElement[] = [];
-  const spacing = 5;
+  const spacing = 8;
   const w = Math.max(x2 - x1, 1);
-  const twist = 8;
+  const twist = 7;
 
   for (let x = 0; x < w; x += spacing) {
     const t = Math.max(0, Math.min(1, x / w));
@@ -25,10 +25,10 @@ export function ropeTexture(
     els.push(
       <Path key={`${prefix}-s-${x}`}
         d={`M ${cx} ${cy - THICK / 2} L ${cx + twist} ${cy + THICK / 2}`}
-        fill="none" stroke="rgba(0,0,0,0.22)" strokeWidth={2.2} />,
+        fill="none" stroke="rgba(0,0,0,0.22)" strokeWidth={2.9} />,
       <Path key={`${prefix}-h-${x}`}
         d={`M ${cx + 1.5} ${cy - THICK / 2} L ${cx + twist + 1.5} ${cy + THICK / 2}`}
-        fill="none" stroke="rgba(255,255,255,0.13)" strokeWidth={1} />
+        fill="none" stroke="rgba(255,255,255,0.13)" strokeWidth={6.6} />
     );
   }
   return els;
@@ -43,7 +43,7 @@ function strandTexture(
   strandWidth: number
 ): React.ReactElement[] {
   const els: React.ReactElement[] = [];
-  const step = 3; // every 3rd point gets a twist mark
+  const step = 1; // every 3rd point gets a twist mark
   for (let i = 0; i < points.length - 1; i += step) {
     const p = points[i];
     const pNext = points[Math.min(i + step, points.length - 1)];
@@ -54,15 +54,15 @@ function strandTexture(
     // normal (perpendicular)
     const nx = -dy / len;
     const ny = dx / len;
-    const hw = strandWidth * 0.45;
+    const hw = strandWidth * 0.65;
 
     els.push(
       <Path key={`${prefix}-ts-${i}`}
         d={`M ${p.x - nx * hw} ${p.y - ny * hw} L ${p.x + nx * hw} ${p.y + ny * hw}`}
-        fill="none" stroke="rgba(0,0,0,0.2)" strokeWidth={2} />,
+        fill="none" stroke="rgba(0,0,0,0.2)" strokeWidth={2.9} />,
       <Path key={`${prefix}-th-${i}`}
         d={`M ${p.x - nx * hw + 1} ${p.y - ny * hw + 1} L ${p.x + nx * hw + 1} ${p.y + ny * hw + 1}`}
-        fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth={0.8} />
+        fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth={1.8} />
     );
   }
   return els;
@@ -93,7 +93,7 @@ function sampleQuadBezier(
 export function KnotBundle({ tieX, tieY, size = 1 }: {
   tieX: number; tieY: number; size?: number;
 }) {
-  const sc = 0.85; // Fixed, slightly smaller size for all knots regardless of loop duration
+  const sc = 0.65; // Fixed, slightly smaller size for all knots regardless of loop duration
 
   return (
     <G transform={`translate(${tieX}, ${tieY})`}>
@@ -148,8 +148,9 @@ export function KnotBundle({ tieX, tieY, size = 1 }: {
 export function KnotLoop({ tieX, tieY, depth }: {
   tieX: number; tieY: number; depth: number;
 }) {
-  const gap = 4;        // horizontal separation at top
-  const bw = 16;        // bottom width of the U curve
+  const gap = 3;        // horizontal separation at top
+  // Dynamic width: the deeper it hangs, the wider it gets
+  const bw = 10 + (depth * 0.38);
   const bottomY = tieY + depth;
 
   // Left strand: from knot center-left, down and curving to bottom-center
@@ -165,17 +166,18 @@ export function KnotLoop({ tieX, tieY, depth }: {
   const leftPath = `M ${lStart.x} ${lStart.y} Q ${lCtrl.x} ${lCtrl.y} ${lEnd.x} ${lEnd.y}`;
   const rightPath = `M ${rStart.x} ${rStart.y} Q ${rCtrl.x} ${rCtrl.y} ${rEnd.x} ${rEnd.y}`;
 
-  // Sample points for twist texture
-  const leftPts = sampleQuadBezier(lStart, lCtrl, lEnd, 30);
-  const rightPts = sampleQuadBezier(rStart, rCtrl, rEnd, 30);
+  // Sample points for twist texture: ~1 stripe every 5 pixels along depth
+  const numSamples = Math.max(12, Math.floor(depth / 5) + 8);
+  const leftPts = sampleQuadBezier(lStart, lCtrl, lEnd, numSamples);
+  const rightPts = sampleQuadBezier(rStart, rCtrl, rEnd, numSamples);
 
   return (
     <G>
       {/* Shadow for both strands */}
       <Path d={`M ${lStart.x + 2} ${lStart.y + 3} Q ${lCtrl.x + 2} ${lCtrl.y + 3} ${lEnd.x + 2} ${lEnd.y + 3}`}
-        fill="none" stroke="rgba(0,0,0,0.2)" strokeWidth={STRAND_W + 2} strokeLinecap="round" />
+        fill="none" stroke="rgba(0,0,0,0.2)" strokeWidth={STRAND_W + 3} strokeLinecap="round" />
       <Path d={`M ${rStart.x + 2} ${rStart.y + 3} Q ${rCtrl.x + 2} ${rCtrl.y + 3} ${rEnd.x + 2} ${rEnd.y + 3}`}
-        fill="none" stroke="rgba(0,0,0,0.2)" strokeWidth={STRAND_W + 2} strokeLinecap="round" />
+        fill="none" stroke="rgba(0,0,0,0.2)" strokeWidth={STRAND_W + 4} strokeLinecap="round" />
 
       {/* Left strand */}
       <Path d={leftPath} fill="none" stroke="url(#kLoop)" strokeWidth={STRAND_W} strokeLinecap="round" />
@@ -203,8 +205,8 @@ export function KnotLoop({ tieX, tieY, depth }: {
 // ───────────────────────────────────────────────────────────
 // LOOSE ROPE — gentle gravity sag for unknotted (inactive) segments
 // ───────────────────────────────────────────────────────────
-export function LooseRope({ x1, x2, ropeY, prefix = 'lr' }: {
-  x1: number; x2: number; ropeY: number; prefix?: string;
+export function LooseRope({ x1, x2, ropeY, isPlayed, prefix = 'lr' }: {
+  x1: number; x2: number; ropeY: number; isPlayed?: boolean; prefix?: string;
 }) {
   const midX = (x1 + x2) / 2;
   const span = x2 - x1;
@@ -216,20 +218,20 @@ export function LooseRope({ x1, x2, ropeY, prefix = 'lr' }: {
     <G>
       {/* Shadow */}
       <Path d={`M ${x1} ${ropeY + 2} Q ${midX} ${sagY + 4} ${x2} ${ropeY + 2}`}
-        fill="none" stroke="rgba(0,0,0,0.12)" strokeWidth={THICK} strokeLinecap="round" />
+        fill="none" stroke="rgba(0,0,0,0.15)" strokeWidth={THICK} strokeLinecap="round" />
 
       {/* Main sag rope */}
       <Path d={`M ${x1} ${ropeY} Q ${midX} ${sagY} ${x2} ${ropeY}`}
-        fill="none" stroke="url(#rBase)" strokeWidth={THICK - 2} strokeOpacity={0.45}
+        fill="none" stroke={isPlayed ? "url(#rPlay)" : "url(#rBase)"} strokeWidth={THICK} strokeOpacity={1.0}
         strokeLinecap="round" />
 
       {/* Highlight on sag */}
       <Path d={`M ${x1} ${ropeY - 2} Q ${midX} ${sagY - 2} ${x2} ${ropeY - 2}`}
-        fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth={3} strokeLinecap="round" />
+        fill="none" stroke="rgba(255,255,255,0.12)" strokeWidth={3} strokeLinecap="round" />
 
       {/* Subtle "memory" glow pulse hint */}
       <Path d={`M ${x1} ${ropeY} Q ${midX} ${sagY} ${x2} ${ropeY}`}
-        fill="none" stroke="#FFCC80" strokeWidth={THICK + 4} strokeOpacity={0.06}
+        fill="none" stroke="#FFCC80" strokeWidth={THICK + 6} strokeOpacity={0.08}
         strokeLinecap="round" />
 
       {/* Twist texture along the sag */}

@@ -18,6 +18,7 @@ export default function LocalSongsScreen() {
   const router = useRouter();
   const setCurrentTrack = usePlayerStore((s) => s.setCurrentTrack);
   const setIsPlaying = usePlayerStore((s) => s.setIsPlaying);
+  const setQueue = usePlayerStore((s) => s.setQueue);
 
   const [tracks, setTracks] = useState<LocalTrack[]>([]);
   const [loading, setLoading] = useState(true);
@@ -73,16 +74,17 @@ export default function LocalSongsScreen() {
     setLoading(false);
   }, []);
 
-  const handlePlay = async (track: LocalTrack) => {
-    const trackData = {
-      local_uri: track.uri,
+  const handlePlay = async (track: LocalTrack, index: number) => {
+    const queueTracks = tracks.map(t => ({
+      local_uri: t.uri,
       source: 'local' as const,
-      title: track.title,
-      artist: track.artist,
+      title: t.title,
+      artist: t.artist,
       thumbnail: '',
-      duration_ms: track.duration_ms,
-    };
-    setCurrentTrack(trackData);
+      duration_ms: t.duration_ms,
+    }));
+    
+    setQueue(queueTracks, index);
     setIsPlaying(true);
     await AudioService.playLocal(track.uri, track.title, track.artist);
     router.push('/player');
@@ -96,8 +98,8 @@ export default function LocalSongsScreen() {
     return `${m}:${s}`;
   };
 
-  const renderTrack = ({ item }: { item: LocalTrack }) => (
-    <TouchableOpacity style={s.trackRow} onPress={() => handlePlay(item)} activeOpacity={0.7}>
+  const renderTrack = ({ item, index }: { item: LocalTrack, index: number }) => (
+    <TouchableOpacity style={s.trackRow} onPress={() => handlePlay(item, index)} activeOpacity={0.7}>
       <View style={s.trackIcon}>
         <Music size={20} color={colors.primary} />
       </View>

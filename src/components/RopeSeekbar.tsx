@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useMemo } from 'react';
 import { View, StyleSheet, PanResponder, Dimensions } from 'react-native';
 import Svg, { Path, Circle, Defs, LinearGradient as SvgGrad, Stop, G, Rect, Text as SvgText } from 'react-native-svg';
 import { colors } from '@/src/theme/colors';
@@ -17,14 +17,14 @@ export { Knot };
 
 // ─── CONSTANTS ───────────────────────────────────────────
 const { width } = Dimensions.get('window');
-const SLIDER_W = width - 48;
-const MIN_DROP = 55;
-const MAX_DROP = 125;
-const ROPE_Y = 40;
+const SLIDER_W = width - 42; // Match KnotEngine
+const MIN_DROP = 25;
+const MAX_DROP = 195;
+const ROPE_Y = 28; // Match KnotEngine
 const CONTAINER_H = 145;
-const THICK = 12;
-const KNOB_R = 12;
-const SHRINK_INTENSITY = 1.0;
+const THICK = 12; // Slightly thicker per previous preference
+const KNOB_R = 7;
+const SHRINK_INTENSITY = .8;
 
 // ─── PROPS ───────────────────────────────────────────────
 interface Props {
@@ -43,7 +43,7 @@ interface Props {
 function drop(k: Knot, totalDur: number, active: boolean) {
   if (!active) return 0;
   const dur = Math.max(k.endTime, k.startTime) - Math.min(k.endTime, k.startTime);
-  const ratio = Math.min(dur / (totalDur * 0.1 || 1), 1.0);
+  const ratio = Math.min(dur / (totalDur * 0.99 || 1), 1.0);
   return MIN_DROP + (MAX_DROP - MIN_DROP) * ratio;
 }
 
@@ -67,36 +67,62 @@ export function RopeSeekbar({
   const displayPos = localPos !== null ? localPos : position;
 
   // Sort knots by start time, attach original index
-  const sorted = [...knots]
-    .map((k, i) => ({
+  const sorted: (Knot & { s: number; e: number; idx: number })[] = useMemo(() => {
+    return knots.map((k: Knot, i: number) => ({
       ...k,
       idx: i,
       s: Math.min(k.startTime, k.endTime),
       e: Math.max(k.startTime, k.endTime),
     }))
-    .sort((a, b) => a.s - b.s);
+      .sort((a, b) => a.s - b.s);
+  }, [knots]);
 
   // ─── SEGMENT BUILDER ────────────────────────────────────
   const segs: KnotSegment[] = [];
   let curT = 0;
-  let totalKnotDuration = 0;
-  for (const k of sorted) if (k.active) totalKnotDuration += k.e - k.s;
+  // Calculate merged active duration to avoid over-counting overlaps
+  let activeKnotDuration = 0;
+  let activeMerged: { s: number, e: number }[] = [];
+  for (const k of sorted) {
+    if (!k.active) continue;
+    if (activeMerged.length > 0 && k.s < activeMerged[activeMerged.length - 1].e) {
+      activeMerged[activeMerged.length - 1].e = Math.max(activeMerged[activeMerged.length - 1].e, k.e);
+    } else {
+      activeMerged.push({ s: k.s, e: k.e });
+    }
+  }
+  for (const m of activeMerged) activeKnotDuration += (m.e - m.s);
 
-  const remainingDuration = duration - totalKnotDuration;
-  const visualRopeWidth = SLIDER_W * (1 - (duration > 0 ? (totalKnotDuration / duration) * SHRINK_INTENSITY : 0));
+  const remainingDuration = duration - activeKnotDuration;
+  const visualRopeWidth = SLIDER_W * (1 - (duration > 0 ? (activeKnotDuration / duration) * SHRINK_INTENSITY : 0));
   const centeringOffset = (SLIDER_W - visualRopeWidth) / 2;
   const pixelsPerSecond = remainingDuration > 0 ? visualRopeWidth / remainingDuration : 0;
 
   let visualX = centeringOffset;
+  curT = 0;
   for (const k of sorted) {
-    if (!k.active) continue;
+    // 1. Regular rope before this knot
     if (k.s > curT) {
       const w = (k.s - curT) * pixelsPerSecond;
       segs.push({ x1: visualX, y1: ROPE_Y, x2: visualX + w, y2: ROPE_Y, t1: curT, t2: k.s });
       visualX += w;
+      curT = k.s;
     }
-    curT = k.e;
+
+    // 2. Handle the knot itself
+    if (k.e > curT) {
+      if (k.active) {
+        curT = k.e;
+      } else {
+        const w = (k.e - curT) * pixelsPerSecond;
+        segs.push({ x1: visualX, y1: ROPE_Y, x2: visualX + w, y2: ROPE_Y, t1: curT, t2: k.e, isLoose: true });
+        visualX += w;
+        curT = k.e;
+      }
+    }
   }
+
+  // 3. Final trailing segment
   if (curT < duration) {
     const w = (duration - curT) * pixelsPerSecond;
     segs.push({ x1: visualX, y1: ROPE_Y, x2: visualX + w, y2: ROPE_Y, t1: curT, t2: duration });
@@ -137,8 +163,10 @@ export function RopeSeekbar({
           gestureType.current = 'knot_drag';
           setDraggingKnot({ idx: hit.idx!, x: hit.x! });
         } else if (hit?.type === 'loose_rope') {
-          // Touch on sagging loose rope → re-knot
+          // Touch on sagging loose rope → Single tap to seek, Double tap to re-knot
           gestureType.current = 're_knot';
+          const p = KnotEngine.visualXToTime(x, segs, duration);
+          setLocalPos(p);
         } else {
           // Bare rope → seek
           gestureType.current = 'seek';
@@ -166,36 +194,48 @@ export function RopeSeekbar({
         const x = KnotEngine.getRelativeX(Math.abs(gs.dx) > 2 ? gs.moveX : pageX);
         const currentDragging = draggingKnotRef.current;
 
-        if (gestureType.current === 'unknot') {
-          // Find the loop that was tapped
+        if ((gestureType.current === 'unknot' || gestureType.current === 'knot_drag') && Math.abs(gs.dx) < 5 && Math.abs(gs.dy) < 5) {
           const hit = KnotEngine.hitTest(x, locationY, sorted, segs, duration, centeringOffset, drop);
-          if (hit?.type === 'loop' || hit?.type === 'active_knot') {
-            if (onKnotToggle) onKnotToggle(hit.idx!);
+          if (hit && (hit.type === 'loop' || hit.type === 'active_knot')) {
+            const now = Date.now();
+            const lastTap = lastTapRef.current;
+            const isDoubleTap = (now - lastTap.time < 500) && (lastTap.idx === hit.idx);
+
+            if (isDoubleTap) {
+              lastTapRef.current = { time: 0, idx: null };
+              if (onKnotDoubleTap) onKnotDoubleTap(hit.idx!);
+            } else {
+              lastTapRef.current = { time: now, idx: hit.idx! };
+              if (gestureType.current === 'unknot') {
+                if (onKnotToggle) onKnotToggle(hit.idx!);
+              } else {
+                const knot = sorted.find(k => k.idx === hit.idx);
+                if (knot && onSeek) onSeek(knot.s);
+              }
+            }
           }
         } else if (gestureType.current === 'knot_drag' && currentDragging) {
           const hit = KnotEngine.hitTest(x, locationY, sorted, segs, duration, centeringOffset, drop);
           if (hit?.type === 'active_knot' && hit.idx !== currentDragging.idx) {
             // Merge knots
             if (onKnotMerge) onKnotMerge(currentDragging.idx, hit.idx!);
-          } else if (Math.abs(gs.dx) < 10 && Math.abs(gs.dy) < 10) {
-            const knot = sorted.find(k => k.idx === currentDragging.idx);
-            const now = Date.now();
-            const lastTap = lastTapRef.current;
-            const isDoubleTap = (now - lastTap.time < 300) && (lastTap.idx === currentDragging.idx);
-            
-            if (isDoubleTap) {
-              const { onKnotDoubleTap } = latest.current;
-              if (onKnotDoubleTap) onKnotDoubleTap(currentDragging.idx);
-              lastTapRef.current = { time: 0, idx: null };
-            } else {
-              lastTapRef.current = { time: now, idx: currentDragging.idx };
-              if (knot && onSeek) onSeek(knot.s);
-            }
           }
-        } else if (gestureType.current === 're_knot') {
+        } else if (gestureType.current === 're_knot' && Math.abs(gs.dx) < 5 && Math.abs(gs.dy) < 5) {
           const hit = KnotEngine.hitTest(x, locationY, sorted, segs, duration, centeringOffset, drop);
           if (hit?.type === 'loose_rope') {
-            if (onKnotToggle) onKnotToggle(hit.idx!);
+            const now = Date.now();
+            const lastTap = lastTapRef.current;
+            const isDoubleTap = (now - lastTap.time < 500) && (lastTap.idx === hit.idx);
+
+            if (isDoubleTap) {
+              lastTapRef.current = { time: 0, idx: null };
+              if (onKnotToggle) onKnotToggle(hit.idx!);
+            } else {
+              lastTapRef.current = { time: now, idx: hit.idx! };
+              // Single tap on loose rope -> Seek
+              const p = KnotEngine.visualXToTime(x, segs, duration);
+              if (onSeek) onSeek(p);
+            }
           }
         } else if (gestureType.current === 'seek') {
           const p = KnotEngine.visualXToTime(x, segs, duration);
@@ -214,8 +254,8 @@ export function RopeSeekbar({
   // ═════════════════════════════════════════════════════════
   return (
     <View style={s.box}>
-      <View {...pan.panHandlers} style={[s.svg, { height: svgH }]}>
-        <Svg width={SLIDER_W} height={svgH} pointerEvents="none">
+      <View {...pan.panHandlers} style={[s.svg, { height: svgH, width: width }]}>
+        <Svg width={width} height={svgH} pointerEvents="none">
           <Defs>
             <SvgGrad id="rBase" x1="0" y1="0" x2="0" y2="1">
               <Stop offset="0" stopColor="#FF9800" />
@@ -244,37 +284,37 @@ export function RopeSeekbar({
             </SvgGrad>
           </Defs>
 
-          <G>
+          <G transform={`translate(${(width - SLIDER_W) / 2}, 0)`}>
             {/* === SHADOW === */}
-            {segs.map((sg, i) => (
+            {segs.map((sg, i) => !sg.isLoose && (
               <Path key={`sh${i}`} d={`M ${sg.x1} ${ROPE_Y + 4} L ${sg.x2} ${ROPE_Y + 4}`}
                 fill="none" stroke="rgba(0,0,0,0.2)" strokeWidth={THICK + 2} strokeLinecap="round" />
             ))}
 
             {/* === BASE ROPE === */}
-            {segs.map((sg, i) => (
+            {segs.map((sg, i) => !sg.isLoose && (
               <Path key={`b${i}`} d={`M ${sg.x1} ${ROPE_Y} L ${sg.x2} ${ROPE_Y}`}
                 fill="none" stroke="url(#rBase)" strokeWidth={THICK} strokeLinecap="round" />
             ))}
 
             {/* === HIGHLIGHT === */}
-            {segs.map((sg, i) => (
-              <Path key={`hi${i}`} d={`M ${sg.x1} ${ROPE_Y - 3} L ${sg.x2} ${ROPE_Y - 3}`}
-                fill="none" stroke="url(#rHi)" strokeWidth={4} strokeLinecap="round" />
+            {segs.map((sg, i) => !sg.isLoose && (
+              <Path key={`hi${i}`} d={`M ${sg.x1} ${ROPE_Y} L ${sg.x2} ${ROPE_Y}`}
+                fill="none" stroke="url(#rHi)" strokeWidth={THICK} strokeLinecap="round" />
             ))}
-
-            {/* === TWISTED TEXTURE === */}
-            {segs.map((sg, i) => ropeTexture(sg.x1, sg.x2, ROPE_Y, `rt${i}`))}
 
             {/* === PLAYED PROGRESS === */}
             {segs.map((sg, i) => {
-              if (px <= sg.x1) return null;
+              if (sg.isLoose || px <= sg.x1) return null;
               const end = Math.min(px, sg.x2);
               return (
                 <Path key={`pl${i}`} d={`M ${sg.x1} ${ROPE_Y} L ${end} ${ROPE_Y}`}
                   fill="none" stroke="url(#rPlay)" strokeWidth={THICK} strokeLinecap="round" />
               );
             })}
+
+            {/* === TWISTED TEXTURE === */}
+            {segs.map((sg, i) => !sg.isLoose && ropeTexture(sg.x1, sg.x2, ROPE_Y, `rt${i}`))}
 
             {/* === ACTIVE KNOT LOOPS (using KnotRenderer) === */}
             {sorted.map((k, i) => {
@@ -322,14 +362,9 @@ export function RopeSeekbar({
             )}
 
             {/* === LOOSE ROPE (Inactive/Unknotted Memory) === */}
-            {sorted.map((k, i) => {
-              if (k.active) return null;
-              const x1 = KnotEngine.timeToVisualX(k.s, segs, duration);
-              const x2 = KnotEngine.timeToVisualX(k.e, segs, duration);
-              return (
-                <LooseRope key={`loose-${i}`} x1={x1} x2={x2} ropeY={ROPE_Y} prefix={`lr-${i}`} />
-              );
-            })}
+            {segs.map((sg, i) => sg.isLoose && (
+              <LooseRope key={`ls${i}`} x1={sg.x1} x2={sg.x2} ropeY={ROPE_Y} isPlayed={displayPos >= sg.t2} prefix={`lr-${i}`} />
+            ))}
 
             {/* === GHOST KNOT (Merge Drag Visual) === */}
             {draggingKnot && <GhostKnot x={draggingKnot.x} y={ROPE_Y} />}
@@ -354,5 +389,5 @@ export function RopeSeekbar({
 
 const s = StyleSheet.create({
   box: { width: '100%', alignItems: 'center', height: CONTAINER_H, zIndex: 10 },
-  svg: { width: SLIDER_W, position: 'absolute', top: 0 },
+  svg: { position: 'absolute', top: 0 },
 });
