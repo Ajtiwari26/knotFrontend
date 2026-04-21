@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { TextInput, StyleSheet, TextInputProps, View, Text } from 'react-native';
 import { colors } from '../theme/colors';
 import { typography } from '../theme/typography';
+import { borderRadius } from '../theme/spacing';
 
 interface InputProps extends TextInputProps {
   label?: string;
@@ -19,7 +20,7 @@ export const Input = ({ label, error, style, ...props }: InputProps) => {
           styles.input,
           isFocused && styles.inputFocused,
           error && styles.inputError,
-          style
+          style,
         ]}
         placeholderTextColor={colors.textSecondary}
         onFocus={() => setIsFocused(true)}
@@ -44,26 +45,33 @@ const styles = StyleSheet.create({
   },
   input: {
     height: 52,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 12,
+    backgroundColor: colors.surfaceContainerLowest,
+    borderRadius: borderRadius.md,
     paddingHorizontal: 16,
     fontSize: typography.size.md,
-    fontFamily: typography.fontFamily.regular,
+    fontFamily: typography.fontFamily.body,
     color: colors.text,
+    // No border by default — minimalist per design system
   },
   inputFocused: {
-    borderColor: colors.borderFocus,
-    backgroundColor: '#FFF4F0', // Slight orange inner glow tint
+    backgroundColor: colors.surfaceContainerLow,
+    // 2px inner glow effect via shadow
+    shadowColor: colors.primaryFixedDim,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 2,
   },
   inputError: {
-    borderColor: colors.error,
+    shadowColor: colors.error,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
   },
   errorText: {
     fontSize: typography.size.xs,
     color: colors.error,
     marginTop: 4,
-    fontFamily: typography.fontFamily.medium,
-  }
+    fontFamily: typography.fontFamily.body,
+  },
 });

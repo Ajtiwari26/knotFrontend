@@ -1,0 +1,25 @@
+src/components/RopeSeekbar.tsx(34,7): error TS2300: Duplicate identifier 'drop'.
+src/components/RopeSeekbar.tsx(83,10): error TS2300: Duplicate identifier 'drop'.
+src/components/RopeSeekbar.tsx(131,32): error TS2353: Object literal may only specify known properties, and 'y1' does not exist in type '{ x1: number; x2: number; t1: number; t2: number; }'.
+src/components/RopeSeekbar.tsx(138,30): error TS2353: Object literal may only specify known properties, and 'y1' does not exist in type '{ x1: number; x2: number; t1: number; t2: number; }'.
+src/components/RopeSeekbar.tsx(141,51): error TS2345: Argument of type '{ x1: number; x2: number; t1: number; t2: number; }[]' is not assignable to parameter of type 'KnotSegment[]'.
+  Type '{ x1: number; x2: number; t1: number; t2: number; }' is missing the following properties from type 'KnotSegment': y1, y2
+src/components/RopeSeekbar.tsx(159,62): error TS2345: Argument of type '{ x1: number; x2: number; t1: number; t2: number; }[]' is not assignable to parameter of type 'KnotSegment[]'.
+  Type '{ x1: number; x2: number; t1: number; t2: number; }' is missing the following properties from type 'KnotSegment': y1, y2
+src/components/RopeSeekbar.tsx(168,49): error TS2345: Argument of type '{ x1: number; x2: number; t1: number; t2: number; }[]' is not assignable to parameter of type 'KnotSegment[]'.
+  Type '{ x1: number; x2: number; t1: number; t2: number; }' is missing the following properties from type 'KnotSegment': y1, y2
+src/components/RopeSeekbar.tsx(179,49): error TS2345: Argument of type '{ x1: number; x2: number; t1: number; t2: number; }[]' is not assignable to parameter of type 'KnotSegment[]'.
+  Type '{ x1: number; x2: number; t1: number; t2: number; }' is missing the following properties from type 'KnotSegment': y1, y2
+src/components/RopeSeekbar.tsx(189,64): error TS2345: Argument of type '{ x1: number; x2: number; t1: number; t2: number; }[]' is not assignable to parameter of type 'KnotSegment[]'.
+  Type '{ x1: number; x2: number; t1: number; t2: number; }' is missing the following properties from type 'KnotSegment': y1, y2
+src/components/RopeSeekbar.tsx(196,64): error TS2345: Argument of type '{ x1: number; x2: number; t1: number; t2: number; }[]' is not assignable to parameter of type 'KnotSegment[]'.
+  Type '{ x1: number; x2: number; t1: number; t2: number; }' is missing the following properties from type 'KnotSegment': y1, y2
+src/components/RopeSeekbar.tsx(201,49): error TS2345: Argument of type '{ x1: number; x2: number; t1: number; t2: number; }[]' is not assignable to parameter of type 'KnotSegment[]'.
+  Type '{ x1: number; x2: number; t1: number; t2: number; }' is missing the following properties from type 'KnotSegment': y1, y2
+src/components/RopeSeekbar.tsx(351,42): error TS2304: Cannot find name 'timeToVisualX'.
+src/components/RopeSeekbar.tsx(357,42): error TS2304: Cannot find name 'timeToVisualX'.
+src/components/RopeSeekbar.tsx(366,26): error TS2304: Cannot find name 'timeToVisualX'.
+src/components/RopeSeekbar.tsx(367,26): error TS2304: Cannot find name 'timeToVisualX'.
+src/components/RopeSeekbar.tsx(383,66): error TS2345: Argument of type '22' is not assignable to parameter of type 'boolean | undefined'.
+src/services/AudioService.ts(77,39): error TS2367: This comparison appears to be unintentional because the types 'State.None | State.Ready | State.Paused | State.Stopped | State.Loading | State.Buffering | State.Error | State.Ended' and 'State.Playing' have no overlap.
+src/services/LocalMusicService.ts(2,29): error TS2307: Cannot find module 'expo-file-system' or its corresponding type declarations.
