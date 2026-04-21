@@ -49,15 +49,15 @@ export default function LoginScreen() {
   const handleGuest = async () => {
     try {
       setLoading(true);
-      const baseUrl = await resolveBaseUrl();
-      const res = await fetch(`${baseUrl}/api/auth/guest`, {
-        method: 'POST'
-      });
+      // Fully offline guest login - bypasses backend check
+      const dummyToken = 'guest-token-' + Date.now();
+      const dummyUser = {
+        id: 'guest',
+        email: 'guest@knot.local',
+        name: 'Guest User',
+      };
       
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Guest login failed');
-      
-      setAuth(data.token, data, true);
+      setAuth(dummyToken, dummyUser, true);
       router.replace('/(tabs)');
     } catch (e: any) {
       Alert.alert('Guest Login Failed', e.message);
