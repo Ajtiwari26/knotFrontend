@@ -7,22 +7,32 @@
         "orientation": "portrait",
         "icon": "./assets/icon.png",
         "userInterfaceStyle": "light",
-        "newArchEnabled": true,
+        "newArchEnabled": false,
         "splash": {
             "image": "./assets/splash-icon.png",
-            "resizeMode": "contain",
-            "backgroundColor": "#f5ece5"
+            "resizeMode": "cover",
+            "backgroundColor": "#F5F2ED"
         },
         "ios": {
             "supportsTablet": true,
-            "bundleIdentifier": "com.knot.app"
+            "bundleIdentifier": "com.ajay.knot",
+            "splash": {
+                "image": "./assets/splash-icon.png",
+                "resizeMode": "cover",
+                "backgroundColor": "#F5F2ED"
+            }
         },
         "android": {
             "adaptiveIcon": {
                 "foregroundImage": "./assets/adaptive-icon.png",
-                "backgroundColor": "#fbf2e9"
+                "backgroundColor": "#ffffff"
             },
-            "package": "com.knot.app",
+            "package": "com.ajay.knot",
+            "splash": {
+                "image": "./assets/splash-icon.png",
+                "resizeMode": "cover",
+                "backgroundColor": "#F5F2ED"
+            },
             "edgeToEdgeEnabled": true,
             "predictiveBackGestureEnabled": false,
             "permissions": [

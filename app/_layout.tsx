@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -16,9 +16,9 @@ import { initApiConfig } from '@/src/config/api';
 import { AudioService } from '@/src/services/AudioService';
 import TrackPlayer from 'react-native-track-player';
 
-SplashScreen.preventAutoHideAsync();
+import CustomSplashScreen from '@/components/SplashScreen';
 
-// Playback service is registered in index.ts
+SplashScreen.preventAutoHideAsync();
 
 export default function RootLayout() {
   const [loaded, error] = useFonts({
@@ -30,24 +30,43 @@ export default function RootLayout() {
     BeVietnamPro_500Medium,
   });
 
+  const [forceRender, setForceRender] = useState(false);
+  const [appReady, setAppReady] = useState(false);
+
   useEffect(() => {
     // Resolve API backend (local vs production)
     initApiConfig();
     
     // Initialize TrackPlayer
-    AudioService.setupPlayer();
+    AudioService.setupPlayer().then(() => {
+      setAppReady(true);
+    });
+
+    // Hide native splash immediately to let our CustomSplashScreen handle it
+    // This solves the "small icon in center" issue on Android 12+
+    const hideNativeSplash = async () => {
+      try {
+        await SplashScreen.hideAsync();
+      } catch (e) {
+        console.warn(e);
+      }
+    };
+    hideNativeSplash();
   }, []);
 
+  // Fallback to ensure app renders even if fonts fail
   useEffect(() => {
-    if (loaded || error) {
-      SplashScreen.hideAsync();
-    }
-  }, [loaded, error]);
+    const timer = setTimeout(() => {
+      setForceRender(true);
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, []);
 
-  if (!loaded && !error) {
-    return null;
+  if ((!loaded || !appReady) && !forceRender) {
+    return <CustomSplashScreen />;
   }
 
+  // If fonts failed but we are forced to render, this will still run
   return (
     <SafeAreaProvider>
       <StatusBar style="dark" />
