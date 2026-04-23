@@ -50,16 +50,9 @@ export default function SearchResultsScreen() {
   const handlePlay = async (track: any, index: number) => {
     try {
       const baseUrl = await resolveBaseUrl();
-      console.log(`[Play] Fetching stream URL for ${track.youtube_id} from ${baseUrl}`);
-      
-      const res = await fetch(`${baseUrl}/api/songs/${track.youtube_id}/stream-url`);
-      const data = await res.json();
-      
-      if (!res.ok || !data.streamUrl) {
-        const errorMsg = data.error || data.message || 'Unknown server error';
-        console.error(`[Play] Server error: ${errorMsg}`, data);
-        throw new Error(errorMsg);
-      }
+      // Use the backend proxy stream — avoids IP-locked YouTube URLs
+      const streamUrl = `${baseUrl}/api/songs/${track.youtube_id}/stream`;
+      console.log(`[Play] Using proxy stream for ${track.youtube_id}: ${streamUrl}`);
       
       const queueTracks: Track[] = results.map(r => ({
         youtube_id: r.youtube_id,
@@ -69,12 +62,12 @@ export default function SearchResultsScreen() {
         thumbnail: r.thumbnail,
         duration_ms: r.duration_ms,
       }));
-      queueTracks[index].streamUrl = data.streamUrl;
+      queueTracks[index].streamUrl = streamUrl;
       
       console.log('[Play] Starting playback...', track.title);
       setQueue(queueTracks, index);
       setIsPlaying(true);
-      await AudioService.playStream(data.streamUrl, track.title, track.artist, track.thumbnail);
+      await AudioService.playStream(streamUrl, track.title, track.artist, track.thumbnail);
       router.push('/player');
     } catch (e) {
       console.error('Play error:', e);

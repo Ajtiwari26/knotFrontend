@@ -24,7 +24,7 @@ const ROPE_Y = 28; // Match KnotEngine
 const CONTAINER_H = 145;
 const THICK = 12; // Slightly thicker per previous preference
 const KNOB_R = 7;
-const SHRINK_INTENSITY = .8;
+const SHRINK_INTENSITY = 0.3; // Reduced from 0.8 to keep rope longer
 
 // ─── PROPS ───────────────────────────────────────────────
 interface Props {
@@ -37,13 +37,14 @@ interface Props {
   onKnotToggle?: (i: number) => void;
   onKnotMerge?: (idx1: number, idx2: number) => void;
   onKnotDoubleTap?: (i: number) => void;
+  onKnotDelete?: (i: number) => void;
 }
 
 // ─── DROP CALCULATOR ─────────────────────────────────────
 function drop(k: Knot, totalDur: number, active: boolean) {
   if (!active) return 0;
   const dur = Math.max(k.endTime, k.startTime) - Math.min(k.endTime, k.startTime);
-  const ratio = Math.min(dur / (totalDur * 0.99 || 1), 1.0);
+  const ratio = Math.min(dur / (totalDur * 0.77 || 1), 1.0);
   return MIN_DROP + (MAX_DROP - MIN_DROP) * ratio;
 }
 
@@ -60,9 +61,11 @@ export function RopeSeekbar({
   onKnotToggle,
   onKnotMerge,
   onKnotDoubleTap,
+  onKnotDelete,
 }: Props) {
   const [localPos, setLocalPos] = useState<number | null>(null);
   const [draggingKnot, setDraggingKnot] = useState<{ idx: number; x: number } | null>(null);
+  const [isMerging, setIsMerging] = useState(false);
 
   const displayPos = localPos !== null ? localPos : position;
 
@@ -78,10 +81,11 @@ export function RopeSeekbar({
   }, [knots]);
 
   // ─── SEGMENT BUILDER ────────────────────────────────────
+  const MIN_ROPE_SEG_W = 32; // Minimum pixels between knots
   const segs: KnotSegment[] = [];
   let curT = 0;
+
   // Calculate merged active duration to avoid over-counting overlaps
-  let activeKnotDuration = 0;
   let activeMerged: { s: number, e: number }[] = [];
   for (const k of sorted) {
     if (!k.active) continue;
@@ -91,41 +95,48 @@ export function RopeSeekbar({
       activeMerged.push({ s: k.s, e: k.e });
     }
   }
-  for (const m of activeMerged) activeKnotDuration += (m.e - m.s);
+  const activeKnotDuration = activeMerged.reduce((sum, m) => sum + (m.e - m.s), 0);
 
-  const remainingDuration = duration - activeKnotDuration;
-  const visualRopeWidth = SLIDER_W * (1 - (duration > 0 ? (activeKnotDuration / duration) * SHRINK_INTENSITY : 0));
-  const centeringOffset = (SLIDER_W - visualRopeWidth) / 2;
-  const pixelsPerSecond = remainingDuration > 0 ? visualRopeWidth / remainingDuration : 0;
-
-  let visualX = centeringOffset;
+  // 1. Calculate how many segments we have and their raw durations
+  let rawSegs: { t1: number; t2: number; isLoose?: boolean }[] = [];
   curT = 0;
   for (const k of sorted) {
-    // 1. Regular rope before this knot
     if (k.s > curT) {
-      const w = (k.s - curT) * pixelsPerSecond;
-      segs.push({ x1: visualX, y1: ROPE_Y, x2: visualX + w, y2: ROPE_Y, t1: curT, t2: k.s });
-      visualX += w;
+      rawSegs.push({ t1: curT, t2: k.s });
       curT = k.s;
     }
-
-    // 2. Handle the knot itself
     if (k.e > curT) {
       if (k.active) {
         curT = k.e;
       } else {
-        const w = (k.e - curT) * pixelsPerSecond;
-        segs.push({ x1: visualX, y1: ROPE_Y, x2: visualX + w, y2: ROPE_Y, t1: curT, t2: k.e, isLoose: true });
-        visualX += w;
+        rawSegs.push({ t1: curT, t2: k.e, isLoose: true });
         curT = k.e;
       }
     }
   }
-
-  // 3. Final trailing segment
   if (curT < duration) {
-    const w = (duration - curT) * pixelsPerSecond;
-    segs.push({ x1: visualX, y1: ROPE_Y, x2: visualX + w, y2: ROPE_Y, t1: curT, t2: duration });
+    rawSegs.push({ t1: curT, t2: duration });
+  }
+
+  // 2. Determine available width for scaling
+  const baseVisualWidth = SLIDER_W * (1 - (duration > 0 ? (activeKnotDuration / duration) * SHRINK_INTENSITY : 0));
+
+  // 3. Ensure minimum width for each segment
+  // We allow the very first segment (t=0) to have 0 min-width so knots can sit at the start
+  const totalMinW = rawSegs.reduce((sum, rs) => sum + (rs.t1 === 0 ? 0 : MIN_ROPE_SEG_W), 0);
+  const flexibleWidth = Math.max(0, baseVisualWidth - totalMinW);
+  const totalRopeDuration = rawSegs.reduce((sum, s) => sum + (s.t2 - s.t1), 0);
+
+  const centeringOffset = (SLIDER_W - baseVisualWidth) / 2;
+  let visualX = centeringOffset;
+
+  for (const rs of rawSegs) {
+    const dur = rs.t2 - rs.t1;
+    const minW = rs.t1 === 0 ? 0 : MIN_ROPE_SEG_W;
+    // Width = min_width + (proportional share of flexible width)
+    const w = minW + (totalRopeDuration > 0 ? (dur / totalRopeDuration) * flexibleWidth : 0);
+    segs.push({ x1: visualX, y1: ROPE_Y, x2: visualX + w, y2: ROPE_Y, t1: rs.t1, t2: rs.t2, isLoose: rs.isLoose });
+    visualX += w;
   }
 
   const px = KnotEngine.timeToVisualX(displayPos, segs, duration);
@@ -136,11 +147,12 @@ export function RopeSeekbar({
   const draggingKnotRef = useRef(draggingKnot);
   draggingKnotRef.current = draggingKnot;
 
-  const latest = useRef({ segs, sorted, duration, onKnotToggle, onSeek, onKnotMerge, onKnotDoubleTap, centeringOffset });
-  latest.current = { segs, sorted, duration, onKnotToggle, onSeek, onKnotMerge, onKnotDoubleTap, centeringOffset };
+  const latest = useRef({ segs, sorted, duration, onKnotToggle, onSeek, onKnotMerge, onKnotDoubleTap, onKnotDelete, centeringOffset });
+  latest.current = { segs, sorted, duration, onKnotToggle, onSeek, onKnotMerge, onKnotDoubleTap, onKnotDelete, centeringOffset };
 
   const gestureType = useRef<'seek' | 'knot_drag' | 'unknot' | 're_knot' | null>(null);
   const lastTapRef = useRef<{ time: number, idx: number | null }>({ time: 0, idx: null });
+  const longPressTimer = useRef<NodeJS.Timeout | null>(null);
 
   // ─── PAN RESPONDER ───────────────────────────────────────
   const pan = useRef(
@@ -154,6 +166,15 @@ export function RopeSeekbar({
         const x = KnotEngine.getRelativeX(pageX);
 
         const hit = KnotEngine.hitTest(x, locationY, sorted, segs, duration, centeringOffset, drop);
+
+        if (hit && (hit.type === 'loop' || hit.type === 'active_knot')) {
+          longPressTimer.current = setTimeout(() => {
+            if (latest.current.onKnotDelete) {
+              latest.current.onKnotDelete(hit.idx!);
+              gestureType.current = null;
+            }
+          }, 600);
+        }
 
         if (hit?.type === 'loop') {
           // Tap on the hanging loop → unknot immediately on release
@@ -176,11 +197,29 @@ export function RopeSeekbar({
       },
 
       onPanResponderMove: (_, gs) => {
+        if (Math.abs(gs.dx) > 10 || Math.abs(gs.dy) > 10) {
+          if (longPressTimer.current) {
+            clearTimeout(longPressTimer.current);
+            longPressTimer.current = null;
+          }
+        }
         const { segs, duration } = latest.current;
         const x = KnotEngine.getRelativeX(gs.moveX);
 
         if (gestureType.current === 'knot_drag') {
           setDraggingKnot(prev => prev ? { ...prev, x } : null);
+
+          // Real-time magnetism check for visual feedback
+          let merging = false;
+          for (const k of latest.current.sorted) {
+            if (!k.active || k.idx === draggingKnotRef.current?.idx) continue;
+            const tieX = KnotEngine.timeToVisualX(k.s, latest.current.segs, latest.current.duration);
+            if (Math.abs(x - tieX) < 45) {
+              merging = true;
+              break;
+            }
+          }
+          setIsMerging(merging);
         } else if (gestureType.current === 'seek') {
           const p = KnotEngine.visualXToTime(x, segs, duration);
           setLocalPos(p);
@@ -189,6 +228,10 @@ export function RopeSeekbar({
       },
 
       onPanResponderRelease: (e, gs) => {
+        if (longPressTimer.current) {
+          clearTimeout(longPressTimer.current);
+          longPressTimer.current = null;
+        }
         const { pageX, locationY } = e.nativeEvent;
         const { sorted, onKnotToggle, onSeek, onKnotMerge, segs, duration, centeringOffset } = latest.current;
         const x = KnotEngine.getRelativeX(Math.abs(gs.dx) > 2 ? gs.moveX : pageX);
@@ -215,10 +258,22 @@ export function RopeSeekbar({
             }
           }
         } else if (gestureType.current === 'knot_drag' && currentDragging) {
-          const hit = KnotEngine.hitTest(x, locationY, sorted, segs, duration, centeringOffset, drop);
-          if (hit?.type === 'active_knot' && hit.idx !== currentDragging.idx) {
-            // Merge knots
-            if (onKnotMerge) onKnotMerge(currentDragging.idx, hit.idx!);
+          // Find nearest other knot within a magnetism radius
+          let nearestKnotIdx: number | null = null;
+          let minKnotDist = 45; // Magnetism threshold in pixels
+
+          for (const k of sorted) {
+            if (!k.active || k.idx === currentDragging.idx) continue;
+            const tieX = KnotEngine.timeToVisualX(k.s, segs, duration);
+            const dist = Math.abs(x - tieX);
+            if (dist < minKnotDist) {
+              minKnotDist = dist;
+              nearestKnotIdx = k.idx;
+            }
+          }
+
+          if (nearestKnotIdx !== null) {
+            if (onKnotMerge) onKnotMerge(currentDragging.idx, nearestKnotIdx);
           }
         } else if (gestureType.current === 're_knot' && Math.abs(gs.dx) < 5 && Math.abs(gs.dy) < 5) {
           const hit = KnotEngine.hitTest(x, locationY, sorted, segs, duration, centeringOffset, drop);
@@ -242,6 +297,7 @@ export function RopeSeekbar({
           if (onSeek) onSeek(p);
         }
 
+        setIsMerging(false);
         setLocalPos(null);
         setDraggingKnot(null);
         gestureType.current = null;
@@ -367,7 +423,7 @@ export function RopeSeekbar({
             ))}
 
             {/* === GHOST KNOT (Merge Drag Visual) === */}
-            {draggingKnot && <GhostKnot x={draggingKnot.x} y={ROPE_Y} />}
+            {draggingKnot && <GhostKnot x={draggingKnot.x} y={ROPE_Y} isMerging={isMerging} />}
 
             {/* === KNOB (Playhead) === */}
             {!knobInKnot && (

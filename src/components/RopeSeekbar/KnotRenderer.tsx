@@ -243,17 +243,23 @@ export function LooseRope({ x1, x2, ropeY, isPlayed, prefix = 'lr' }: {
 // ───────────────────────────────────────────────────────────
 // GHOST KNOT — semi-transparent knot during merge drag
 // ───────────────────────────────────────────────────────────
-export function GhostKnot({ x, y }: { x: number; y: number }) {
+export function GhostKnot({ x, y, isMerging = false }: { x: number; y: number; isMerging?: boolean }) {
   return (
-    <G transform={`translate(${x}, ${y})`} opacity={0.45}>
+    <G transform={`translate(${x}, ${y})`} opacity={isMerging ? 0.8 : 0.45}>
       {/* Glow ring */}
-      <Circle r={24} fill="#FF9800" opacity={0.15} />
+      <Circle r={isMerging ? 32 : 24} fill={isMerging ? "#FFD54F" : "#FF9800"} opacity={isMerging ? 0.3 : 0.15} />
       {/* Simplified knot silhouette */}
-      <Path d="M -14 0 C -8 -10, 8 -10, 14 0" fill="none" stroke="#FF9800" strokeWidth={6} strokeLinecap="round" />
-      <Path d="M -10 3 C -3 -5, 3 -5, 10 3" fill="none" stroke="#FFCC80" strokeWidth={4} strokeLinecap="round" />
-      <Path d="M -12 1 Q 0 8, 12 1" fill="none" stroke="#E65100" strokeWidth={5} strokeLinecap="round" />
+      <Path d="M -14 0 C -8 -10, 8 -10, 14 0" fill="none" stroke={isMerging ? "#FFA000" : "#FF9800"} strokeWidth={isMerging ? 8 : 6} strokeLinecap="round" />
+      <Path d="M -10 3 C -3 -5, 3 -5, 10 3" fill="none" stroke={isMerging ? "#FFF" : "#FFCC80"} strokeWidth={isMerging ? 5 : 4} strokeLinecap="round" />
+      <Path d="M -12 1 Q 0 8, 12 1" fill="none" stroke="#E65100" strokeWidth={isMerging ? 7 : 5} strokeLinecap="round" />
       {/* Drop hint */}
-      <Path d="M -6 6 Q 0 22 6 6" fill="none" stroke="#FF9800" strokeWidth={3} strokeLinecap="round" strokeDasharray="4,3" />
+      <Path d="M -6 6 Q 0 22 6 6" fill="none" stroke={isMerging ? "#FFA000" : "#FF9800"} strokeWidth={3} strokeLinecap="round" strokeDasharray="4,3" />
+      
+      {isMerging && (
+        <Circle r={4} fill="#FFF" opacity={0.6}>
+          {/* Subtle spark/glint */}
+        </Circle>
+      )}
     </G>
   );
 }

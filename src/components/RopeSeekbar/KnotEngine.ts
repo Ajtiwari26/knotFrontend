@@ -61,7 +61,7 @@ export const KnotEngine = {
     // If time is in a gap (active knot), find the segment that ends at or after this time
     // We sort segs by t1 just in case, though they usually are.
     const sortedSegs = [...segs].sort((a, b) => a.t1 - b.t1);
-    
+
     // If time is before the first segment
     if (sortedSegs.length > 0 && time < sortedSegs[0].t1) {
       return sortedSegs[0].x1;
@@ -95,29 +95,33 @@ export const KnotEngine = {
     _centeringOffset: number,
     dropFunc: (k: Knot, d: number, active: boolean) => number
   ): HitResult | null => {
+    let bestHit: HitResult | null = null;
+    let minDistance = Infinity;
 
-    // ── 1. Check LOOP zone (below rope, on the hanging teardrop) ──
-    // This is checked FIRST so tapping a loop can never trigger seek
-    if (y > ROPE_Y + 15) {
-      for (const k of knots) {
-        if (!k.active) continue;
+    // ── 1. Check LOOP zone (hanging teardrops) ──
+    for (const k of knots) {
+      if (!k.active) continue;
 
-        const sVal = Math.min(k.startTime, k.endTime);
-        const tieX = KnotEngine._findTieX(sVal, segs);
-        const d = dropFunc(k, duration, true);
+      const sVal = Math.min(k.startTime, k.endTime);
+      const tieX = KnotEngine._findTieX(sVal, segs);
+      const d = d = dropFunc(k, duration, true);
 
-        // The loop hangs from tieX, from ROPE_Y+6 down to ROPE_Y+6+d
-        const loopBottom = ROPE_Y + 6 + d;
-        const loopWidth = 22; // horizontal extent of the teardrop
+      const loopBottom = ROPE_Y + 6 + d;
+      const loopWidth = 25; // Slightly wider hitbox for ease of use
 
-        // Check if touch is within the teardrop region
-        if (x > tieX - loopWidth && x < tieX + loopWidth && y > ROPE_Y + 10 && y < loopBottom + 10) {
-          return { type: 'loop', idx: k.idx, x: tieX };
+      if (x > tieX - loopWidth && x < tieX + loopWidth && y > ROPE_Y + 10 && y < loopBottom + 10) {
+        // Distance to center of loop
+        const centerX = tieX;
+        const centerY = ROPE_Y + 6 + d / 2;
+        const dist = Math.sqrt((x - centerX) ** 2 + (y - centerY) ** 2);
+        if (dist < minDistance) {
+          minDistance = dist;
+          bestHit = { type: 'loop', idx: k.idx, x: tieX };
         }
       }
     }
 
-    // ── 2. Check ACTIVE KNOT BUNDLE zone (on the rope line) ──
+    // ── 2. Check ACTIVE KNOT BUNDLE zone ──
     for (const k of knots) {
       if (!k.active) continue;
 
@@ -127,13 +131,18 @@ export const KnotEngine = {
       const dx = Math.abs(x - tieX);
       const dy = Math.abs(y - ROPE_Y);
 
-      // Knot bundle is ~30px wide, ±20px vertically from rope
-      if (dx < 30 && dy < 20) {
-        return { type: 'active_knot', idx: k.idx, x: tieX };
+      // Wider hit zone for small knots
+      if (dx < 35 && dy < 25) {
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < minDistance) {
+          minDistance = dist;
+          bestHit = { type: 'active_knot', idx: k.idx, x: tieX };
+        }
       }
     }
 
-    // ── 3. Check LOOSE ROPE zone (inactive knot memory) ──
+    // ── 3. Check LOOSE ROPE zone ──
+    // Only if we haven't found a knot/loop hit, or if this is much closer
     for (const k of knots) {
       if (k.active) continue;
 
@@ -141,24 +150,22 @@ export const KnotEngine = {
       const e = Math.max(k.startTime, k.endTime);
       const x1 = KnotEngine.timeToVisualX(s, segs, duration);
       const x2 = KnotEngine.timeToVisualX(e, segs, duration);
-      const midX = (x1 + x2) / 2;
-      const span = x2 - x1;
-      const sagDepth = Math.min(10 + span * 0.04, 18);
-
-      // Point-to-parabola proximity check
-      // The sag curve: y = ROPE_Y + sagDepth * sin(π * t) where t = (x - x1)/(x2 - x1)
-      if (x > x1 - 15 && x < x2 + 15) {
+      
+      if (x > x1 - 20 && x < x2 + 20) {
+        const span = x2 - x1;
+        const sagDepth = Math.min(10 + span * 0.04, 18);
         const t = Math.max(0, Math.min(1, (x - x1) / (x2 - x1 || 1)));
         const curveY = ROPE_Y + Math.sin(t * Math.PI) * sagDepth;
         const dist = Math.abs(y - curveY);
 
-        if (dist < 20) {
-          return { type: 'loose_rope', idx: k.idx };
+        if (dist < 25 && dist < minDistance) {
+          minDistance = dist;
+          bestHit = { type: 'loose_rope', idx: k.idx };
         }
       }
     }
 
-    return null;
+    return bestHit;
   },
 
   /**

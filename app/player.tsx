@@ -22,7 +22,7 @@ export default function PlayerScreen() {
   const currentTrack = usePlayerStore(state => state.currentTrack);
   const activeKnot = usePlayerStore(state => state.activeKnot);
   const setIsPlayingStore = usePlayerStore(state => state.setIsPlaying);
-  
+
   const playbackState = usePlaybackState();
   const activeTrack = useActiveTrack();
   const isPlaying = playbackState?.state === State.Playing;
@@ -43,9 +43,9 @@ export default function PlayerScreen() {
       usePlayerStore.getState().setCurrentTrack(recoveredTrack);
     }
   }, [currentTrack, activeTrack]);
-  
+
   const { position, duration } = useProgress(250);
-  
+
   const library = useLibraryStore();
   const trackId = currentTrack ? (currentTrack.source === 'youtube' ? currentTrack.youtube_id : currentTrack.local_uri) : '';
   const liked = library.isLiked(trackId || '');
@@ -202,11 +202,15 @@ export default function PlayerScreen() {
     setKnots(prev => {
       const knot = prev[index];
       if (!knot || !knot.subKnots || knot.subKnots.length === 0) return prev;
-      
+
       // Remove the merged knot and add its constituent sub-knots back
       const filtered = prev.filter((_, i) => i !== index);
       return [...filtered, ...knot.subKnots];
     });
+  };
+
+  const handleKnotDelete = (index: number) => {
+    setKnots(prev => prev.filter((_, i) => i !== index));
   };
 
   const handleClearKnots = () => {
@@ -216,6 +220,7 @@ export default function PlayerScreen() {
   };
 
   const handleUndoLastKnot = () => {
+    // Revert to LIFO (Last-In-First-Out) creation order as clarified by the user
     setKnots(prev => prev.slice(0, -1));
   };
 
@@ -315,16 +320,17 @@ export default function PlayerScreen() {
       </View>
 
       {/* Rope Seekbar */}
-      <RopeSeekbar 
-        duration={duration > 0 ? duration : (currentTrack.duration_ms / 1000) || 0} 
-        position={position} 
+      <RopeSeekbar
+        duration={duration > 0 ? duration : (currentTrack.duration_ms / 1000) || 0}
+        position={position}
         knots={knots}
         pendingA={pendingA}
         pendingB={pendingB}
         onSeek={handleSeek}
-        onKnotToggle={handleKnotToggle} 
+        onKnotToggle={handleKnotToggle}
         onKnotMerge={handleKnotMerge}
         onKnotDoubleTap={handleKnotSplit}
+        onKnotDelete={handleKnotDelete}
       />
       <View style={s.timeRow}>
         <Text style={s.time}>{formatTime(position * 1000)}</Text>
@@ -342,20 +348,20 @@ export default function PlayerScreen() {
 
       {/* Knot Controls */}
       <View style={s.knotActionRow}>
-        <TouchableOpacity 
-          style={[s.knotActionBtn, pendingA !== null && s.knotActionBtnActive]} 
+        <TouchableOpacity
+          style={[s.knotActionBtn, pendingA !== null && s.knotActionBtnActive]}
           onPress={handleMarkA}
         >
           <Text style={[s.knotActionText, pendingA !== null && s.knotActionTextActive]}>Mark A</Text>
         </TouchableOpacity>
-        <TouchableOpacity 
-          style={[s.knotActionBtn, pendingB !== null && s.knotActionBtnActive]} 
+        <TouchableOpacity
+          style={[s.knotActionBtn, pendingB !== null && s.knotActionBtnActive]}
           onPress={handleMarkB}
         >
           <Text style={[s.knotActionText, pendingB !== null && s.knotActionTextActive]}>Mark B</Text>
         </TouchableOpacity>
-        <TouchableOpacity 
-          style={[s.knotTieBtn, canTie && s.knotTieBtnReady]} 
+        <TouchableOpacity
+          style={[s.knotTieBtn, canTie && s.knotTieBtnReady]}
           onPress={handleTieKnot}
           disabled={!canTie}
         >
@@ -441,29 +447,29 @@ const s = StyleSheet.create({
 
   // Knot controls
   knotActionRow: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 10, marginTop: 12, marginBottom: 4, zIndex: 20 },
-  knotActionBtn: { 
-    paddingHorizontal: 14, paddingVertical: 7, borderRadius: 18, 
-    backgroundColor: colors.surfaceContainerHigh, borderWidth: 1.5, borderColor: 'transparent' 
+  knotActionBtn: {
+    paddingHorizontal: 14, paddingVertical: 7, borderRadius: 18,
+    backgroundColor: colors.surfaceContainerHigh, borderWidth: 1.5, borderColor: 'transparent'
   },
   knotActionBtnActive: { borderColor: '#FF6D00', backgroundColor: 'rgba(255,109,0,0.15)' },
   knotActionText: { fontFamily: typography.fontFamily.semibold, fontSize: 12, color: colors.textSecondary },
   knotActionTextActive: { color: '#FF6D00' },
-  knotTieBtn: { 
+  knotTieBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 5,
-    paddingHorizontal: 16, paddingVertical: 7, borderRadius: 18, 
-    backgroundColor: colors.surfaceContainerHighest 
+    paddingHorizontal: 16, paddingVertical: 7, borderRadius: 18,
+    backgroundColor: colors.surfaceContainerHighest
   },
   knotTieBtnReady: { backgroundColor: '#E65100' },
   knotTieText: { fontFamily: typography.fontFamily.bold, fontSize: 12, color: colors.textSecondary },
   knotTieTextReady: { color: '#FFF' },
-  knotUndoBtn: { 
-    width: 32, height: 32, borderRadius: 16, 
-    backgroundColor: colors.surfaceContainerHigh, 
-    justifyContent: 'center', alignItems: 'center' 
+  knotUndoBtn: {
+    width: 32, height: 32, borderRadius: 16,
+    backgroundColor: colors.surfaceContainerHigh,
+    justifyContent: 'center', alignItems: 'center'
   },
-  knotCountRow: { 
-    flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 12, 
-    marginBottom: 16 
+  knotCountRow: {
+    flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 12,
+    marginBottom: 16
   },
   knotCountText: { fontFamily: typography.fontFamily.body, fontSize: 11, color: colors.textSecondary },
   knotClearText: { fontFamily: typography.fontFamily.semibold, fontSize: 11, color: '#FF6D00' },

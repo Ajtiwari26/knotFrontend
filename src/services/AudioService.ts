@@ -93,20 +93,15 @@ export class AudioService {
     } else {
       let streamUrl = track.streamUrl;
       if (!streamUrl) {
-        // Fetch it!
+        // Use the backend proxy stream — it's much more reliable than direct YT URLs
+        // which are often IP-locked or require specific headers.
         try {
-          const { resolveBaseUrl } = require('@/src/config/api');
-          const baseUrl = await resolveBaseUrl();
-          const res = await fetch(`${baseUrl}/api/songs/${track.youtube_id}/stream-url`);
-          const data = await res.json();
-          if (res.ok && data.streamUrl) {
-            streamUrl = data.streamUrl;
-          } else {
-            throw new Error(data.error || 'Failed to fetch stream URL');
-          }
+          const { getBaseUrl } = require('@/src/config/api');
+          const baseUrl = getBaseUrl();
+          streamUrl = `${baseUrl}/api/songs/${track.youtube_id}/stream`;
         } catch (e) {
-          console.error('[AudioService] Error fetching stream URL', e);
-          return; // Can't play
+          console.error('[AudioService] Error constructing stream URL', e);
+          return;
         }
       }
       await this.playStream(streamUrl, track.title, track.artist, track.thumbnail);
