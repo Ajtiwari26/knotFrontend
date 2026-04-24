@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, Image, TouchableOpacity, Dimensions, Share } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Dimensions, Share } from 'react-native';
+import { Artwork } from '@/src/components/Artwork';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { ChevronDown, Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Heart, ListMusic, Share2, Scissors, X } from 'lucide-react-native';
@@ -30,11 +31,12 @@ export default function PlayerScreen() {
   // Sync store with native player if store is empty but player is active
   useEffect(() => {
     if (!currentTrack && activeTrack) {
+      const art = activeTrack.artwork;
       const recoveredTrack = {
         source: activeTrack.url?.startsWith('http') ? 'youtube' : 'local',
         title: activeTrack.title || 'Unknown',
         artist: activeTrack.artist || 'Unknown',
-        thumbnail: typeof activeTrack.artwork === 'string' ? activeTrack.artwork : '',
+        thumbnail: typeof art === 'string' ? art : (typeof art === 'number' ? String(art) : ''),
         duration_ms: (activeTrack.duration || 0) * 1000,
         local_uri: activeTrack.url?.startsWith('file://') ? activeTrack.url : undefined,
         youtube_id: !activeTrack.url?.startsWith('file://') ? 'recovered' : undefined,
@@ -59,8 +61,9 @@ export default function PlayerScreen() {
     }
   };
 
-  // Multi-knot state
-  const [knots, setKnots] = useState<Knot[]>([]);
+  // Multi-knot state (now global)
+  const knots = usePlayerStore(state => state.knots);
+  const setKnots = usePlayerStore(state => state.setKnots);
   const [pendingA, setPendingA] = useState<number | null>(null);
   const [pendingB, setPendingB] = useState<number | null>(null);
 
@@ -68,31 +71,13 @@ export default function PlayerScreen() {
     setIsPlayingStore(isPlaying);
   }, [isPlaying]);
 
-  // Auto-load saved knots when track changes
-  useEffect(() => {
-    const loadSaved = async () => {
-      if (!currentTrack) return;
-      const songKey = currentTrack.source === 'local' ? currentTrack.local_uri : currentTrack.youtube_id;
-      if (songKey) {
-        const savedKnot = await KnotService.getSavedKnot(songKey);
-        if (savedKnot) {
-          setKnots(savedKnot.junctions.map(j => ({
-            startTime: j.start_ms / 1000,
-            endTime: j.end_ms / 1000,
-            active: true
-          })));
-        } else {
-          setKnots([]);
-        }
-      }
-    };
-    loadSaved();
-  }, [currentTrack]);
 
-  // Auto-save knots when they change
+
+  // Auto-save knots when they change (user edits them)
   useEffect(() => {
     const save = async () => {
-      if (!currentTrack || knots.length === 0) return;
+      if (!currentTrack) return;
+      if (knots.length === 0) return;
       const songKey = currentTrack.source === 'local' ? currentTrack.local_uri : currentTrack.youtube_id;
       if (songKey) {
         const knotData = {
@@ -103,6 +88,11 @@ export default function PlayerScreen() {
           original_duration_ms: currentTrack.duration_ms,
         };
         await KnotService.saveKnot(songKey, knotData);
+
+        // Sync to backend for cross-install persistence
+        if (currentTrack.source === 'local') {
+          KnotService.syncToBackend(currentTrack, knotData);
+        }
       }
     };
     save();
@@ -224,17 +214,7 @@ export default function PlayerScreen() {
     setKnots(prev => prev.slice(0, -1));
   };
 
-  // Audio skip logic: when playback enters any ACTIVE knot, jump past it
-  useEffect(() => {
-    if (knots.length === 0) return;
-    for (const knot of knots) {
-      // Use a smaller lookahead (0.2s) for tighter "remix" feel
-      if (knot.active && position >= knot.startTime && position < knot.endTime - 0.2) {
-        AudioService.seekTo(knot.endTime);
-        break;
-      }
-    }
-  }, [position, knots]);
+  // Audio skip logic has been moved to GlobalPlayerController for cross-screen support
 
   const formatTime = (ms: number) => {
     const totalSeconds = Math.floor(ms / 1000);
@@ -290,7 +270,16 @@ export default function PlayerScreen() {
 
       {/* Album Art */}
       <View style={s.artWrap}>
-        <Image source={currentTrack.thumbnail ? { uri: currentTrack.thumbnail } : require('@/assets/icon.png')} style={s.art} />
+        <Artwork 
+          uri={currentTrack.thumbnail || (typeof activeTrack?.artwork === 'string' ? activeTrack.artwork : undefined)} 
+          thumbnail={currentTrack.thumbnail || (typeof activeTrack?.artwork === 'string' ? activeTrack.artwork : undefined)} 
+          style={s.art} 
+          onImageError={() => {
+            if (activeTrack) {
+              AudioService.setFallbackArtwork();
+            }
+          }}
+        />
       </View>
 
       {/* Track Info */}

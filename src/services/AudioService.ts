@@ -15,7 +15,7 @@ export class AudioService {
       await TrackPlayer.setupPlayer();
       await TrackPlayer.updateOptions({
         android: {
-          appKilledPlaybackBehavior: AppKilledPlaybackBehavior.StopPlaybackAndRemoveNotification,
+          appKilledPlaybackBehavior: AppKilledPlaybackBehavior.ContinuePlayback,
         },
         capabilities: [
           Capability?.Play,
@@ -23,10 +23,21 @@ export class AudioService {
           Capability?.SkipToNext,
           Capability?.SkipToPrevious,
           Capability?.SeekTo,
+          Capability?.Stop,
         ].filter(Boolean) as Capability[],
         compactCapabilities: [
           Capability?.Play,
           Capability?.Pause,
+          Capability?.SkipToNext,
+          Capability?.SkipToPrevious,
+        ].filter(Boolean) as Capability[],
+        notificationCapabilities: [
+          Capability?.Play,
+          Capability?.Pause,
+          Capability?.SkipToNext,
+          Capability?.SkipToPrevious,
+          Capability?.SeekTo,
+          Capability?.Stop,
         ].filter(Boolean) as Capability[],
       });
       this.isSetup = true;
@@ -38,12 +49,12 @@ export class AudioService {
   /**
    * Play a YouTube stream URL.
    */
-  static async playStream(url: string, title: string, artist: string, thumbnail: string) {
+  static async playStream(url: string, title: string, artist: string, thumbnail: string, id: string = 'knot-stream') {
     if (!this.isSetup) await this.setupPlayer();
 
     await TrackPlayer.reset();
     await TrackPlayer.add({
-      id: 'knot-stream',
+      id: id,
       url,
       title,
       artist,
@@ -57,12 +68,12 @@ export class AudioService {
    * Play a local device audio file.
    * Uses the file:// URI directly — TrackPlayer supports local URIs natively.
    */
-  static async playLocal(uri: string, title: string, artist: string, thumbnail?: string) {
+  static async playLocal(uri: string, title: string, artist: string, thumbnail?: string, id: string = 'knot-local') {
     if (!this.isSetup) await this.setupPlayer();
 
     await TrackPlayer.reset();
     await TrackPlayer.add({
-      id: 'knot-local',
+      id: id,
       url: uri,
       title,
       artist,
@@ -81,6 +92,17 @@ export class AudioService {
     }
   }
 
+  static async setFallbackArtwork() {
+    try {
+      const { Image } = require('react-native');
+      const fallbackUri = Image.resolveAssetSource(require('@/assets/icon.png')).uri;
+      await TrackPlayer.updateNowPlayingMetadata({ artwork: fallbackUri });
+      console.log('[AudioService] Updated TrackPlayer with fallback artwork');
+    } catch (e) {
+      console.warn('[AudioService] Failed to set fallback artwork:', e);
+    }
+  }
+
   static async seekTo(position: number) {
     await TrackPlayer.seekTo(position);
   }
@@ -89,12 +111,10 @@ export class AudioService {
     if (!this.isSetup) await this.setupPlayer();
 
     if (track.source === 'local') {
-      await this.playLocal(track.local_uri, track.title, track.artist, track.thumbnail);
+      await this.playLocal(track.local_uri, track.title, track.artist, track.thumbnail, track.local_uri);
     } else {
       let streamUrl = track.streamUrl;
       if (!streamUrl) {
-        // Use the backend proxy stream — it's much more reliable than direct YT URLs
-        // which are often IP-locked or require specific headers.
         try {
           const { getBaseUrl } = require('@/src/config/api');
           const baseUrl = getBaseUrl();
@@ -104,7 +124,7 @@ export class AudioService {
           return;
         }
       }
-      await this.playStream(streamUrl, track.title, track.artist, track.thumbnail);
+      await this.playStream(streamUrl, track.title, track.artist, track.thumbnail, track.youtube_id);
     }
   }
 }

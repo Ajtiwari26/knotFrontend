@@ -1,11 +1,13 @@
 import React from 'react';
-import { View, Text, Image, TouchableOpacity, StyleSheet } from 'react-native';
-import { Play, SkipForward } from 'lucide-react-native';
+import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { Artwork } from './Artwork';
+import { Play, Pause, SkipForward } from 'lucide-react-native';
 import { BlurView } from 'expo-blur';
 import { useRouter } from 'expo-router';
 import { colors } from '../theme/colors';
 import { typography } from '../theme/typography';
 import { borderRadius } from '../theme/spacing';
+import { AudioService } from '../services/AudioService';
 
 import { usePlayerStore } from '../store/playerStore';
 import { usePlaybackState, State, useActiveTrack } from 'react-native-track-player';
@@ -19,15 +21,16 @@ export const PlayerBar = ({
 }: PlayerBarProps) => {
   const router = useRouter();
   const activeTrack = useActiveTrack();
+  const currentTrack = usePlayerStore(state => state.currentTrack);
   const playbackState = usePlaybackState();
   
   const isPlaying = playbackState.state === State.Playing;
   
-  if (!activeTrack) return null;
+  if (!activeTrack || !currentTrack) return null;
 
-  const title = activeTrack.title || 'Unknown Track';
-  const artist = activeTrack.artist || 'Unknown Artist';
-  const thumbnail = typeof activeTrack.artwork === 'string' ? activeTrack.artwork : undefined;
+  const title = currentTrack.title || activeTrack.title || 'Unknown Track';
+  const artist = currentTrack.artist || activeTrack.artist || 'Unknown Artist';
+  const thumbnail = currentTrack.thumbnail || (typeof activeTrack.artwork === 'string' ? activeTrack.artwork : undefined);
 
   return (
     <TouchableOpacity
@@ -37,11 +40,16 @@ export const PlayerBar = ({
     >
       <BlurView intensity={60} tint="light" style={styles.blur}>
         <View style={styles.inner}>
-          {thumbnail ? (
-            <Image source={{ uri: thumbnail }} style={styles.art} />
-          ) : (
-            <View style={[styles.art, styles.artPlaceholder]} />
-          )}
+          <Artwork 
+            uri={thumbnail} 
+            thumbnail={thumbnail} 
+            style={styles.art} 
+            onImageError={() => {
+              if (activeTrack) {
+                AudioService.setFallbackArtwork();
+              }
+            }}
+          />
 
           <View style={styles.info}>
             <Text style={styles.title} numberOfLines={1}>{title}</Text>
@@ -52,14 +60,14 @@ export const PlayerBar = ({
           </View>
 
           <View style={styles.controls}>
-            <TouchableOpacity style={styles.controlBtn}>
-              <Play
-                size={22}
-                color={colors.text}
-                fill={isPlaying ? colors.text : 'transparent'}
-              />
+            <TouchableOpacity style={styles.controlBtn} onPress={() => AudioService.togglePlayPause()}>
+              {isPlaying ? (
+                <Pause size={22} color={colors.text} fill={colors.text} />
+              ) : (
+                <Play size={22} color={colors.text} fill={colors.text} />
+              )}
             </TouchableOpacity>
-            <TouchableOpacity style={styles.controlBtn}>
+            <TouchableOpacity style={styles.controlBtn} onPress={() => usePlayerStore.getState().nextTrack()}>
               <SkipForward size={22} color={colors.text} fill={colors.text} />
             </TouchableOpacity>
           </View>

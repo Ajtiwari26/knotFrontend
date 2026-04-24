@@ -9,6 +9,7 @@ export interface Junction {
 export interface Track {
   youtube_id?: string;       // present for YouTube songs
   local_uri?: string;        // file:// URI for device songs
+  filename?: string;         // stable filename for knot matching
   source: 'youtube' | 'local';
   title: string;
   artist: string;
@@ -25,9 +26,17 @@ export interface ActiveKnot {
   original_duration_ms: number;
 }
 
+export interface Knot {
+  startTime: number;
+  endTime: number;
+  active: boolean;
+  subKnots?: Knot[];
+}
+
 interface PlayerState {
   currentTrack: Track | null;
   activeKnot: ActiveKnot | null;
+  knots: Knot[];
   isPlaying: boolean;
   queue: Track[];
   currentIndex: number;
@@ -36,6 +45,7 @@ interface PlayerState {
   
   setCurrentTrack: (track: Track | null) => void;
   setActiveKnot: (knot: ActiveKnot | null) => void;
+  setKnots: (knots: Knot[] | ((prev: Knot[]) => Knot[])) => void;
   setIsPlaying: (isPlaying: boolean) => void;
   setQueue: (queue: Track[], startIndex?: number) => void;
   setRepeatMode: (mode: 'off' | 'track' | 'list') => void;
@@ -48,6 +58,7 @@ interface PlayerState {
 export const usePlayerStore = create<PlayerState>((set, get) => ({
   currentTrack: null,
   activeKnot: null,
+  knots: [],
   isPlaying: false,
   queue: [],
   currentIndex: 0,
@@ -56,6 +67,9 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   
   setCurrentTrack: (track) => set({ currentTrack: track }),
   setActiveKnot: (knot) => set({ activeKnot: knot }),
+  setKnots: (updater) => set((state) => ({
+    knots: typeof updater === 'function' ? updater(state.knots) : updater
+  })),
   setIsPlaying: (isPlaying) => set({ isPlaying }),
   
   setQueue: (queue, startIndex = 0) => {

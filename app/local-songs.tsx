@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput,
-  ActivityIndicator, Image,
+  ActivityIndicator
 } from 'react-native';
+import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { ArrowLeft, Search, Music, FolderOpen } from 'lucide-react-native';
@@ -11,8 +12,9 @@ import { colors } from '@/src/theme/colors';
 import { typography } from '@/src/theme/typography';
 import { spacing, borderRadius } from '@/src/theme/spacing';
 import { LocalMusicService, LocalTrack } from '@/src/services/LocalMusicService';
-import { AudioService } from '@/src/services/AudioService';
 import { usePlayerStore } from '@/src/store/playerStore';
+import { Artwork } from '@/src/components/Artwork';
+import { AudioService } from '@/src/services/AudioService';
 
 export default function LocalSongsScreen() {
   const router = useRouter();
@@ -80,13 +82,13 @@ export default function LocalSongsScreen() {
       source: 'local' as const,
       title: t.title,
       artist: t.artist,
-      thumbnail: '',
+      thumbnail: t.thumbnail || '',
       duration_ms: t.duration_ms,
     }));
     
     setQueue(queueTracks, index);
     setIsPlaying(true);
-    await AudioService.playLocal(track.uri, track.title, track.artist);
+    await AudioService.playLocal(track.uri, track.title, track.artist, track.thumbnail, track.uri);
     router.push('/player');
   };
 
@@ -100,9 +102,7 @@ export default function LocalSongsScreen() {
 
   const renderTrack = ({ item, index }: { item: LocalTrack, index: number }) => (
     <TouchableOpacity style={s.trackRow} onPress={() => handlePlay(item, index)} activeOpacity={0.7}>
-      <View style={s.trackIcon}>
-        <Music size={20} color={colors.primary} />
-      </View>
+      <Artwork uri={item.thumbnail} thumbnail={item.thumbnail} style={s.trackArt} />
       <View style={s.trackInfo}>
         <Text style={s.trackTitle} numberOfLines={1}>{item.title}</Text>
         <Text style={s.trackArtist} numberOfLines={1}>{item.artist} • {formatDuration(item.duration_ms)}</Text>
@@ -244,10 +244,9 @@ const s = StyleSheet.create({
     paddingVertical: 12, borderBottomWidth: 0.5,
     borderBottomColor: colors.surfaceContainerHigh,
   },
-  trackIcon: {
+  trackArt: {
     width: 48, height: 48, borderRadius: borderRadius.md,
-    backgroundColor: colors.surfaceContainerLow,
-    justifyContent: 'center', alignItems: 'center', marginRight: 14,
+    backgroundColor: colors.surfaceContainerLow, marginRight: 14,
   },
   trackInfo: { flex: 1 },
   trackTitle: {

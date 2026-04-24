@@ -14,11 +14,14 @@ import { BeVietnamPro_400Regular, BeVietnamPro_500Medium } from '@expo-google-fo
 import { colors } from '@/src/theme/colors';
 import { initApiConfig } from '@/src/config/api';
 import { AudioService } from '@/src/services/AudioService';
+import { LocalMusicService } from '@/src/services/LocalMusicService';
 import TrackPlayer from 'react-native-track-player';
 
 import CustomSplashScreen from '@/components/SplashScreen';
 
 SplashScreen.preventAutoHideAsync();
+
+import { GlobalPlayerController } from '@/src/components/GlobalPlayerController';
 
 export default function RootLayout() {
   const [loaded, error] = useFonts({
@@ -37,6 +40,9 @@ export default function RootLayout() {
     // Resolve API backend (local vs production)
     initApiConfig();
     
+    // Initialize Local Music Listeners
+    LocalMusicService.init();
+
     // Initialize TrackPlayer
     AudioService.setupPlayer().then(() => {
       setAppReady(true);
@@ -70,6 +76,7 @@ export default function RootLayout() {
   return (
     <SafeAreaProvider>
       <StatusBar style="dark" />
+      <GlobalPlayerController />
       <Stack
         screenOptions={{
           headerShown: false,
@@ -89,7 +96,6 @@ export default function RootLayout() {
         <Stack.Screen name="edit-profile" />
         <Stack.Screen name="knot-editor" options={{ animation: 'slide_from_bottom', presentation: 'modal' }} />
         <Stack.Screen name="downloads" />
-        <Stack.Screen name="search-results" />
         <Stack.Screen name="save-knot" options={{ animation: 'slide_from_bottom', presentation: 'modal' }} />
         <Stack.Screen name="welcome" options={{ animation: 'fade' }} />
       </Stack>

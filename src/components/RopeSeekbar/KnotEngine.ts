@@ -104,7 +104,7 @@ export const KnotEngine = {
 
       const sVal = Math.min(k.startTime, k.endTime);
       const tieX = KnotEngine._findTieX(sVal, segs);
-      const d = d = dropFunc(k, duration, true);
+      const d = dropFunc(k, duration, true);
 
       const loopBottom = ROPE_Y + 6 + d;
       const loopWidth = 25; // Slightly wider hitbox for ease of use

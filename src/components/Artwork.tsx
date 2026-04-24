@@ -1,17 +1,19 @@
 import React, { useState } from 'react';
-import { StyleSheet, StyleProp, ImageStyle, Image } from 'react-native';
+import { StyleSheet, StyleProp } from 'react-native';
+import { Image, ImageStyle } from 'expo-image';
 
 interface ArtworkProps {
   uri?: string;
-  thumbnail?: string; // We'll use this primarily
+  thumbnail?: string;
   style?: StyleProp<ImageStyle>;
+  onImageError?: () => void;
 }
 
-export const Artwork = ({ uri, thumbnail, style }: ArtworkProps) => {
+export const Artwork = ({ uri, thumbnail, style, onImageError }: ArtworkProps) => {
   const [hasError, setHasError] = useState(false);
   let sourceUri = thumbnail || uri;
 
-  // Auto-fix old cached URIs from the player store
+  // Auto-fix old cached URIs if they are in the wrong format
   if (sourceUri && sourceUri.includes('/audio/albumart/')) {
     const match = sourceUri.match(/\/audio\/albumart\/(-?\d+)/);
     if (match) {
@@ -19,17 +21,19 @@ export const Artwork = ({ uri, thumbnail, style }: ArtworkProps) => {
     }
   }
 
-  if (!sourceUri || hasError) {
-    return <Image source={require('@/assets/icon.png')} style={[style, { resizeMode: 'cover' }]} />;
-  }
+  const placeholder = require('@/assets/icon.png');
 
   return (
     <Image 
-      source={{ uri: sourceUri }} 
-      style={[style, { resizeMode: 'cover' }]} 
+      source={hasError || !sourceUri ? placeholder : { uri: sourceUri }} 
+      style={[style]} 
+      contentFit="cover"
+      transition={200}
+      cachePolicy="disk"
       onError={(e) => {
-        console.log('[Artwork] RN Image Failed to load:', sourceUri, e.nativeEvent.error);
+        console.log('[Artwork] Image Failed to load:', sourceUri);
         setHasError(true);
+        if (onImageError) onImageError();
       }}
     />
   );

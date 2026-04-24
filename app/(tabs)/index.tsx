@@ -1,7 +1,9 @@
-import React from 'react';
-import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Dimensions } from 'react-native';
+import React, { useState, useCallback } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Dimensions, ActivityIndicator } from 'react-native';
+import { Artwork } from '@/src/components/Artwork';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import { Play, Heart, Bell } from 'lucide-react-native';
 import { colors } from '@/src/theme/colors';
 import { typography } from '@/src/theme/typography';
@@ -9,35 +11,27 @@ import { spacing, borderRadius } from '@/src/theme/spacing';
 import { SectionHeader } from '@/src/components/SectionHeader';
 import { TrackItem } from '@/src/components/TrackItem';
 import { PlayerBar } from '@/src/components/PlayerBar';
+import { KnotService } from '@/src/services/KnotService';
+import { LocalMusicService, LocalTrack } from '@/src/services/LocalMusicService';
+import { AudioService } from '@/src/services/AudioService';
+import { usePlayerStore, Track } from '@/src/store/playerStore';
 
 const { width } = Dimensions.get('window');
 
-const FEATURED_KNOTS = [
-  {
-    id: '1',
-    title: 'Kitne Bechain Hoke',
-    artist: 'Alka Yagnik, Udit Narayan',
-    thumbnail: 'https://i.ytimg.com/vi/0JCLpa-r4Lg/hqdefault.jpg',
-    knotName: 'No Intro Knot',
-    duration: '4:32',
-  },
-  {
-    id: '2',
-    title: 'Never Gonna Give You Up',
-    artist: 'Rick Astley',
-    thumbnail: 'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg',
-    knotName: 'Clean Intro',
-    duration: '3:33',
-  },
-  {
-    id: '3',
-    title: 'Bohemian Rhapsody',
-    artist: 'Queen',
-    thumbnail: 'https://i.ytimg.com/vi/fJ9rUzIMcZQ/hqdefault.jpg',
-    knotName: 'Guitar Solo Only',
-    duration: '5:55',
-  },
-];
+interface KnottedSong {
+  id: string;
+  title: string;
+  artist: string;
+  thumbnail: string;
+  knotName: string;
+  duration: string;
+  uri?: string;
+  source: 'local' | 'youtube';
+  filename?: string;
+  duration_ms: number;
+  createdAt: number;
+  knotCount: number;
+}
 
 const TRENDING = [
   { id: 't1', title: 'Blinding Lights', artist: 'The Weeknd', thumbnail: 'https://i.ytimg.com/vi/4NRXx6U8ABQ/hqdefault.jpg', duration: '3:20', knotName: 'Drop Only' },
@@ -48,6 +42,94 @@ const TRENDING = [
 
 export default function HomeScreen() {
   const router = useRouter();
+  const [knotted, setKnotted] = useState<KnottedSong[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // Load knotted songs on focus
+  useFocusEffect(
+    useCallback(() => {
+      loadKnottedSongs();
+    }, [])
+  );
+
+  const loadKnottedSongs = async () => {
+    try {
+      setLoading(true);
+
+      // 1. Load all local tracks from the device cache
+      const { tracks: allLocal } = await LocalMusicService.getDeviceSongs(5000);
+
+      // 2. Load all knotted details (sorted newest first)
+      const details = await KnotService.getAllKnottedDetails();
+
+      // 3. Match details to local files
+      const matched: KnottedSong[] = [];
+      for (const item of details) {
+        const uri = item.key;
+        let match = allLocal.find(t => t.uri === uri);
+        if (!match) {
+          const fn = uri.split('/').pop()?.toLowerCase();
+          if (fn) match = allLocal.find(t => t.filename.toLowerCase() === fn);
+        }
+
+        if (match) {
+          matched.push({
+            id: match.id,
+            title: match.title,
+            artist: match.artist,
+            thumbnail: match.thumbnail || '',
+            knotName: `${item.knot.junctions?.length || 0} Knot${(item.knot.junctions?.length || 0) !== 1 ? 's' : ''}`,
+            duration: formatDuration(match.duration_ms),
+            uri: match.uri,
+            source: 'local',
+            filename: match.filename,
+            duration_ms: match.duration_ms,
+            createdAt: item.createdAt,
+            knotCount: item.knot.junctions?.length || 0,
+          });
+        }
+      }
+
+      setKnotted(matched);
+    } catch (error) {
+      console.error('[Home] Error loading knotted songs:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePlay = async (track: KnottedSong, allTracks: KnottedSong[]) => {
+    try {
+      const localTrack: Track = {
+        youtube_id: track.id || track.uri,
+        source: 'local' as const,
+        title: track.title,
+        artist: track.artist,
+        thumbnail: track.thumbnail,
+        duration_ms: track.duration_ms,
+        local_uri: track.uri,
+        filename: track.filename,
+      };
+
+      const queue: Track[] = allTracks.map(t => ({
+        youtube_id: t.id || t.uri,
+        source: 'local' as const,
+        title: t.title,
+        artist: t.artist,
+        thumbnail: t.thumbnail,
+        duration_ms: t.duration_ms,
+        local_uri: t.uri,
+        filename: t.filename,
+      }));
+
+      const startIndex = queue.findIndex(q => (q.local_uri || q.youtube_id) === (localTrack.local_uri || localTrack.youtube_id));
+      usePlayerStore.getState().setQueue(queue, startIndex >= 0 ? startIndex : 0);
+      await AudioService.playQueueTrack(localTrack);
+      router.push('/player');
+    } catch (error) {
+      console.error('[Home] Error playing track:', error);
+    }
+  };
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -70,34 +152,49 @@ export default function HomeScreen() {
         </View>
 
         {/* Featured Knots Carousel */}
-        <SectionHeader title="Recently Knotted" />
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.carouselContent}
-          style={styles.carousel}
-        >
-          {FEATURED_KNOTS.map((knot) => (
-            <TouchableOpacity
-              key={knot.id}
-              style={styles.knotCard}
-              activeOpacity={0.85}
-              onPress={() => router.push('/song-detail')}
-            >
-              <Image source={{ uri: knot.thumbnail }} style={styles.knotImage} />
-              <View style={styles.playOverlay}>
-                <View style={styles.playBadge}>
-                  <Play size={18} color={colors.onPrimary} fill={colors.onPrimary} />
+        <SectionHeader 
+          title="Recently Knotted" 
+          onAction={() => router.push('/knotted-songs')}
+        />
+        {loading ? (
+          <ActivityIndicator size="small" color={colors.primary} style={{ marginVertical: 20 }} />
+        ) : knotted.length === 0 ? (
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyText}>No knotted songs yet. Start knotting your music!</Text>
+          </View>
+        ) : (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.carouselContent}
+            style={styles.carousel}
+          >
+            {knotted.map((knot) => (
+              <TouchableOpacity
+                key={knot.id}
+                style={styles.knotCard}
+                activeOpacity={0.85}
+                onPress={() => handlePlay(knot, knotted)}
+              >
+                <Artwork
+                  uri={knot.thumbnail}
+                  thumbnail={knot.thumbnail}
+                  style={styles.knotImage}
+                />
+                <View style={styles.playOverlay}>
+                  <View style={styles.playBadge}>
+                    <Play size={18} color={colors.onPrimary} fill={colors.onPrimary} />
+                  </View>
                 </View>
-              </View>
-              <Text style={styles.knotTitle} numberOfLines={1}>{knot.title}</Text>
-              <Text style={styles.knotArtist} numberOfLines={1}>{knot.artist}</Text>
-              <View style={styles.knotBadgeWrap}>
-                <Text style={styles.knotBadge}>{knot.knotName}</Text>
-              </View>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
+                <Text style={styles.knotTitle} numberOfLines={1}>{knot.title}</Text>
+                <Text style={styles.knotArtist} numberOfLines={1}>{knot.artist}</Text>
+                <View style={styles.knotBadgeWrap}>
+                  <Text style={styles.knotBadge}>{knot.knotName}</Text>
+                </View>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        )}
 
         {/* Trending Knots */}
         <View style={styles.sectionGap} />
@@ -141,6 +238,13 @@ export default function HomeScreen() {
       <PlayerBar />
     </SafeAreaView>
   );
+}
+
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.floor(ms / 1000);
+  const m = Math.floor(totalSeconds / 60);
+  const s = String(totalSeconds % 60).padStart(2, '0');
+  return `${m}:${s}`;
 }
 
 const styles = StyleSheet.create({
@@ -278,5 +382,15 @@ const styles = StyleSheet.create({
     fontFamily: typography.fontFamily.semibold,
     fontSize: typography.size.xs,
     color: colors.text,
+  },
+  emptyState: {
+    paddingVertical: 30,
+    alignItems: 'center',
+  },
+  emptyText: {
+    fontFamily: typography.fontFamily.body,
+    fontSize: typography.size.sm,
+    color: colors.textSecondary,
+    textAlign: 'center',
   },
 });

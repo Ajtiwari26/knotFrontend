@@ -1,5 +1,6 @@
 import React from 'react';
-import { View, Text, Image, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { Artwork } from './Artwork';
 import { Play, Heart, MoreHorizontal } from 'lucide-react-native';
 import { colors } from '../theme/colors';
 import { typography } from '../theme/typography';
@@ -31,13 +32,7 @@ export const TrackItem = ({
   return (
     <TouchableOpacity style={styles.container} onPress={onPress} activeOpacity={0.7}>
       <View style={styles.artWrap}>
-        {thumbnail ? (
-          <Image source={{ uri: thumbnail }} style={styles.art} />
-        ) : (
-          <View style={[styles.art, styles.artPlaceholder]}>
-            <Play size={16} color={colors.primary} />
-          </View>
-        )}
+        <Artwork uri={thumbnail} thumbnail={thumbnail} style={styles.art} />
       </View>
 
       <View style={styles.info}>

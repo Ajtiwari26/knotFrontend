@@ -3,8 +3,8 @@ import * as FileSystem from 'expo-file-system';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 // v3 - Persistent cache + background scan + thumbnail support
 
-const CACHE_KEY = 'local_music_cache_v2';
-const MAX_CACHE_SIZE = 5000;
+const CACHE_KEY = 'local_music_cache_v4';
+const MAX_CACHE_SIZE = 50000; // Increased significantly for 'unlimited' feel
 
 export interface LocalTrack {
   id: string;
@@ -20,6 +20,20 @@ export interface LocalTrack {
 export class LocalMusicService {
   private static cachedTracks: LocalTrack[] | null = null;
   private static isScanning = false;
+  private static listenerSubscription: any = null;
+
+  /**
+   * Initialize listeners to catch new songs instantly without polling.
+   */
+  static init() {
+    if (this.listenerSubscription) return;
+    
+    // Listen for system media store changes
+    this.listenerSubscription = MediaLibrary.addListener(() => {
+      console.log('[LocalMusicService] System MediaStore changed! Updating cache...');
+      this.silentUpdate();
+    });
+  }
 
   /**
    * Request permission to access media library.
@@ -65,7 +79,7 @@ export class LocalMusicService {
         if (diskCache) {
           const parsed = JSON.parse(diskCache) as LocalTrack[];
           // Force refresh if thumbnail does NOT have the albumart path
-          const needsRefresh = parsed.length > 0 && parsed[0].thumbnail && !parsed[0].thumbnail.includes('/audio/albumart');
+          const needsRefresh = parsed.length > 0 && parsed[0].thumbnail && !parsed[0].thumbnail.includes('albumart');
           
           if (needsRefresh) {
             console.log('[LocalMusicService] Old cache detected. Forcing full rescan.');
@@ -106,7 +120,7 @@ export class LocalMusicService {
       while (allTracks.length < pageSize && hasNextPage) {
         const mediaPage = await MediaLibrary.getAssetsAsync({
           mediaType: 'audio',
-          first: 100, // Fetch more to filter out short/invalid tracks
+          first: 500, // Faster indexing with larger pages
           after: currentCursor,
           sortBy: [[MediaLibrary.SortBy.creationTime, false]],
         });
@@ -129,8 +143,11 @@ export class LocalMusicService {
         hasNextPage = mediaPage.hasNextPage;
       }
 
+      // Deduplicate by ID
+      const uniqueTracks = Array.from(new Map(allTracks.map(t => [t.id, t])).values());
+
       return {
-        tracks: allTracks,
+        tracks: uniqueTracks,
         endCursor: currentCursor || '',
         hasNextPage: hasNextPage,
       };
@@ -155,7 +172,7 @@ export class LocalMusicService {
       while (hasMore) {
         const result = await MediaLibrary.getAssetsAsync({
           mediaType: [MediaLibrary.MediaType.audio],
-          first: 200,
+          first: 500,
           after: cursor,
         });
 
@@ -182,6 +199,9 @@ export class LocalMusicService {
           break;
         }
       }
+
+      // Deduplicate by ID
+      allTracks = Array.from(new Map(allTracks.map(t => [t.id, t])).values());
 
       // Fallback if MediaLibrary found nothing
       if (allTracks.length === 0) {
@@ -220,7 +240,7 @@ export class LocalMusicService {
         const totalCount = result.totalCount || 0;
         const cachedCount = this.cachedTracks?.length || 0;
 
-        if (totalCount > cachedCount) {
+        if (totalCount !== cachedCount) {
           console.log(`[LocalMusicService] Silent update: found ${totalCount - cachedCount} new files. Re-scanning...`);
           this.cachedTracks = null;
           await this.backgroundScan();
@@ -286,29 +306,36 @@ export class LocalMusicService {
    * Search local songs by filename.
    */
   static async searchDeviceSongs(query: string): Promise<LocalTrack[]> {
+    const q = query.toLowerCase();
+
+    // 1. If already in memory, filter immediately (instant)
     if (this.cachedTracks) {
-       const q = query.toLowerCase();
        return this.cachedTracks.filter(
          (t) => t.title.toLowerCase().includes(q) || t.filename.toLowerCase().includes(q)
        );
     }
 
-    let allTracks: LocalTrack[] = [];
-    let cursor: string | undefined;
-    let hasMore = true;
-
-    while (hasMore) {
-      const { tracks, endCursor, hasNextPage } = await this.getDeviceSongs(200, cursor);
-      allTracks = [...allTracks, ...tracks];
-      cursor = endCursor;
-      hasMore = hasNextPage;
-      if (allTracks.length >= 2000) break;
+    // 2. Not in memory, try to load from disk cache
+    try {
+      const diskCache = await AsyncStorage.getItem(CACHE_KEY);
+      if (diskCache) {
+        this.cachedTracks = JSON.parse(diskCache) as LocalTrack[];
+        return this.cachedTracks.filter(
+          (t) => t.title.toLowerCase().includes(q) || t.filename.toLowerCase().includes(q)
+        );
+      }
+    } catch (e) {
+      console.warn('[LocalMusicService] Failed to read disk cache during search:', e);
     }
 
-    this.cachedTracks = allTracks;
-
-    const q = query.toLowerCase();
-    return allTracks.filter(
+    // 3. Last resort: Perform a quick initial scan and populate memory
+    // This only happens on the very first search if cache is totally empty
+    const result = await this.getDeviceSongs(2000); 
+    // Note: getDeviceSongs sets this.cachedTracks if it loads from disk
+    // If not, we use the results from the live scan
+    const tracksToFilter = this.cachedTracks || result.tracks;
+    
+    return tracksToFilter.filter(
       (t) => t.title.toLowerCase().includes(q) || t.filename.toLowerCase().includes(q)
     );
   }
@@ -318,6 +345,14 @@ export class LocalMusicService {
    */
   static getAllCachedTracks(): LocalTrack[] {
     return this.cachedTracks || [];
+  }
+
+  /**
+   * Force a full scan to populate cache.
+   */
+  static async forceRescan(): Promise<void> {
+    this.cachedTracks = null;
+    await this.backgroundScan();
   }
 }
 
