@@ -60,7 +60,7 @@ export class AudioService {
       artist,
       ...(thumbnail ? { artwork: thumbnail } : {}),
     });
-    
+
     await TrackPlayer.play();
   }
 
@@ -105,6 +105,28 @@ export class AudioService {
 
   static async seekTo(position: number) {
     await TrackPlayer.seekTo(position);
+  }
+
+  static async seekToSmoothly(position: number) {
+    // Subtler volume dip (60ms) - don't go to zero to avoid "song ended" feel
+    for (let v = 0.8; v >= 0.15; v -= 0.15) {
+      await TrackPlayer.setVolume(v);
+      await new Promise(r => setTimeout(r, 15));
+    }
+    await TrackPlayer.setVolume(0.15);
+
+    // Perform the jump
+    await TrackPlayer.seekTo(position);
+    
+    // Tiny delay
+    await new Promise(r => setTimeout(r, 60));
+
+    // Volume ramp up (200ms)
+    for (let v = 0.3; v <= 1.0; v += 0.2) {
+      await TrackPlayer.setVolume(v);
+      await new Promise(r => setTimeout(r, 40));
+    }
+    await TrackPlayer.setVolume(1.0);
   }
 
   static async playQueueTrack(track: any) {
