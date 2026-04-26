@@ -123,21 +123,41 @@ export class AudioService {
       const baseUrl = getBaseUrl();
 
       if (!streamUrl) {
-        // Step 1: Try client-side resolution (Piped API)
+        // Step 1: Try client-side resolution (Cluster of Mirrors)
         try {
           console.log(`[AudioService] Client-side resolution for ${track.youtube_id}...`);
-          const res = await fetch(`https://pipedapi.kavin.rocks/streams/${track.youtube_id}`);
-          if (res.ok) {
-            const data = await res.json();
-            const audio = data.audioStreams?.find((s: any) => s.format === 'WEBM_OPUS' || s.bitrate > 100000);
-            if (audio?.url) {
-              console.log(`[AudioService] Client-side success via Piped!`);
-              // IMPORTANT: We pass this to the backend so the backend can proxy it (knotting support)
-              streamUrl = `${baseUrl}/api/songs/${track.youtube_id}/stream?stream_url=${encodeURIComponent(audio.url)}`;
-            }
+          const instances = [
+            'https://pipedapi.kavin.rocks',
+            'https://api-piped.mha.fi',
+            'https://pipedapi.nerdy.fi',
+            'https://inv.nadeko.net'
+          ];
+
+          for (const instance of instances) {
+            try {
+              console.log(`[AudioService] Trying client-side mirror: ${instance}`);
+              const isPiped = instance.includes('piped');
+              const url = isPiped 
+                ? `${instance}/streams/${track.youtube_id}`
+                : `${instance}/api/v1/videos/${track.youtube_id}`;
+              
+              const res = await fetch(url);
+              if (res.ok) {
+                const data = await res.json();
+                const audioUrl = isPiped
+                  ? data.audioStreams?.find((s: any) => s.bitrate > 100000)?.url
+                  : data.adaptiveFormats?.find((f: any) => f.type?.includes('audio'))?.url;
+
+                if (audioUrl) {
+                  console.log(`[AudioService] Success via ${instance}!`);
+                  streamUrl = `${baseUrl}/api/songs/${track.youtube_id}/stream?stream_url=${encodeURIComponent(audioUrl)}`;
+                  break;
+                }
+              }
+            } catch (e) { /* try next mirror */ }
           }
         } catch (e) {
-          console.warn('[AudioService] Client-side resolution failed:', e);
+          console.warn('[AudioService] Client-side resolution cluster failed:', e);
         }
 
         // Step 2: Fallback to standard backend stream
