@@ -123,30 +123,26 @@ export class AudioService {
       const baseUrl = getBaseUrl();
 
       if (!streamUrl) {
-        // Step 1: Try client-side resolution (bypass Render IP blocks)
+        // Step 1: Try client-side resolution (Piped API)
         try {
           console.log(`[AudioService] Client-side resolution for ${track.youtube_id}...`);
-          const instances = ['https://inv.nadeko.net', 'https://yewtu.be', 'https://invidious.flokinet.to'];
-          for (const instance of instances) {
-            try {
-              const res = await fetch(`${instance}/api/v1/videos/${track.youtube_id}`);
-              if (res.ok) {
-                const data = await res.json();
-                const audio = data.adaptiveFormats?.find((f: any) => f.type?.includes('audio') && !f.type?.includes('video'));
-                if (audio?.url) {
-                  console.log(`[AudioService] Client-side success via ${instance}`);
-                  streamUrl = `${baseUrl}/api/songs/${track.youtube_id}/stream?stream_url=${encodeURIComponent(audio.url)}`;
-                  break;
-                }
-              }
-            } catch (e) { /* continue */ }
+          const res = await fetch(`https://pipedapi.kavin.rocks/streams/${track.youtube_id}`);
+          if (res.ok) {
+            const data = await res.json();
+            const audio = data.audioStreams?.find((s: any) => s.format === 'WEBM_OPUS' || s.bitrate > 100000);
+            if (audio?.url) {
+              console.log(`[AudioService] Client-side success via Piped!`);
+              // IMPORTANT: We pass this to the backend so the backend can proxy it (knotting support)
+              streamUrl = `${baseUrl}/api/songs/${track.youtube_id}/stream?stream_url=${encodeURIComponent(audio.url)}`;
+            }
           }
         } catch (e) {
-          console.warn('[AudioService] Client-side resolution failed, falling back to backend extraction.');
+          console.warn('[AudioService] Client-side resolution failed:', e);
         }
 
-        // Step 2: Fallback to standard backend stream (which now has its own Invidious fallback)
+        // Step 2: Fallback to standard backend stream
         if (!streamUrl) {
+          console.log('[AudioService] Falling back to backend extraction...');
           streamUrl = `${baseUrl}/api/songs/${track.youtube_id}/stream`;
         }
       }
