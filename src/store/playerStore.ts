@@ -42,6 +42,10 @@ interface PlayerState {
   currentIndex: number;
   repeatMode: 'off' | 'track' | 'list';
   shuffle: boolean;
+  knottingStatus: 'idle' | 'uploading' | 'processing' | 'done' | 'error';
+  knottingProgress: number;
+  knottingPhase: string;
+  pendingKnots: Knot[] | null;
   
   setCurrentTrack: (track: Track | null) => void;
   setActiveKnot: (knot: ActiveKnot | null) => void;
@@ -50,6 +54,10 @@ interface PlayerState {
   setQueue: (queue: Track[], startIndex?: number) => void;
   setRepeatMode: (mode: 'off' | 'track' | 'list') => void;
   setShuffle: (shuffle: boolean) => void;
+  setKnottingStatus: (status: 'idle' | 'uploading' | 'processing' | 'done' | 'error') => void;
+  setKnottingProgress: (progress: number) => void;
+  setKnottingPhase: (phase: string) => void;
+  setPendingKnots: (knots: Knot[] | null) => void;
   nextTrack: () => void;
   prevTrack: () => void;
   reset: () => void;
@@ -64,6 +72,10 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   currentIndex: 0,
   repeatMode: 'off',
   shuffle: false,
+  knottingStatus: 'idle',
+  knottingProgress: 0,
+  knottingPhase: '',
+  pendingKnots: null,
   
   setCurrentTrack: (track) => set({ currentTrack: track }),
   setActiveKnot: (knot) => set({ activeKnot: knot }),
@@ -78,6 +90,10 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   
   setRepeatMode: (mode) => set({ repeatMode: mode }),
   setShuffle: (shuffle) => set({ shuffle }),
+  setKnottingStatus: (status) => set({ knottingStatus: status }),
+  setKnottingProgress: (progress) => set({ knottingProgress: progress }),
+  setKnottingPhase: (phase) => set({ knottingPhase: phase }),
+  setPendingKnots: (knots) => set({ pendingKnots: knots }),
   
   nextTrack: () => {
     const { queue, currentIndex, repeatMode, shuffle } = get();

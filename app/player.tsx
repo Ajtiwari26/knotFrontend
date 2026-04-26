@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, Dimensions, Share } from 'rea
 import { Artwork } from '@/src/components/Artwork';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { ChevronDown, Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Heart, ListMusic, Share2, Scissors, X } from 'lucide-react-native';
+import { ChevronDown, Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Heart, ListMusic, Share2, Scissors, X, Wand2 } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { colors } from '@/src/theme/colors';
 import { typography } from '@/src/theme/typography';
@@ -14,15 +14,21 @@ import { KnotService } from '@/src/services/KnotService';
 import TrackPlayer, { useProgress, State, usePlaybackState, useActiveTrack } from 'react-native-track-player';
 import { RopeSeekbar, Knot } from '@/src/components/RopeSeekbar';
 import { useLibraryStore } from '@/src/store/libraryStore';
+import { AutoKnotSheet } from '@/src/components/AutoKnotSheet';
+import { AutoKnotTier } from '@/src/services/AutoKnotService';
 
 const { width } = Dimensions.get('window');
-const ART_SIZE = width - 110;
+const ART_SIZE = width - 150; // More aggressive reduction for better vertical fit
 
 export default function PlayerScreen() {
   const router = useRouter();
   const currentTrack = usePlayerStore(state => state.currentTrack);
   const activeKnot = usePlayerStore(state => state.activeKnot);
   const setIsPlayingStore = usePlayerStore(state => state.setIsPlaying);
+  const knottingStatus = usePlayerStore(state => state.knottingStatus);
+  const knottingProgress = usePlayerStore(state => state.knottingProgress);
+  const knottingPhase = usePlayerStore(state => state.knottingPhase);
+  const pendingKnots = usePlayerStore(state => state.pendingKnots);
 
   const playbackState = usePlaybackState();
   const activeTrack = useActiveTrack();
@@ -66,6 +72,7 @@ export default function PlayerScreen() {
   const setKnots = usePlayerStore(state => state.setKnots);
   const [pendingA, setPendingA] = useState<number | null>(null);
   const [pendingB, setPendingB] = useState<number | null>(null);
+  const [autoKnotVisible, setAutoKnotVisible] = useState(false);
 
   useEffect(() => {
     setIsPlayingStore(isPlaying);
@@ -323,6 +330,7 @@ export default function PlayerScreen() {
       />
       <View style={s.timeRow}>
         <Text style={s.time}>{formatTime(position * 1000)}</Text>
+        
         <View style={{ flexDirection: 'row', gap: 6 }}>
           {knottedDuration < duration - 1 && (
             <Text style={[s.time, { textDecorationLine: 'line-through', opacity: 0.5 }]}>
@@ -334,6 +342,39 @@ export default function PlayerScreen() {
           </Text>
         </View>
       </View>
+
+      {/* Background Knotting Status Label */}
+      {knottingStatus !== 'idle' && (
+        <View style={s.knottingStatusRow}>
+          {knottingStatus === 'done' ? (
+            <TouchableOpacity 
+              style={s.applyKnotsBtn} 
+              onPress={() => {
+                if (pendingKnots) setKnots(pendingKnots);
+                usePlayerStore.getState().setKnottingStatus('idle');
+                usePlayerStore.getState().setPendingKnots(null);
+              }}
+            >
+              <Wand2 size={14} color="#FFF" />
+              <Text style={s.applyKnotsText}>Apply Auto-Knots</Text>
+            </TouchableOpacity>
+          ) : knottingStatus === 'error' ? (
+            <TouchableOpacity onPress={() => usePlayerStore.getState().setKnottingStatus('idle')}>
+              <Text style={[s.statusText, { color: colors.error }]}>⚠️ Analysis Failed. Tap to clear.</Text>
+            </TouchableOpacity>
+          ) : (
+            <View style={s.statusLoadingRow}>
+              <View style={s.orangeDot} />
+              <Text style={s.statusText}>
+                {`${knottingPhase} ${Math.round(knottingProgress)}%`}
+              </Text>
+              <Text style={[s.statusText, { color: colors.textSecondary, fontSize: 10, textTransform: 'none' }]}>
+                (Do not close player)
+              </Text>
+            </View>
+          )}
+        </View>
+      )}
 
       {/* Knot Controls */}
       <View style={s.knotActionRow}>
@@ -399,26 +440,46 @@ export default function PlayerScreen() {
       {/* Bottom Actions */}
       <View style={s.bottomActions}>
         <TouchableOpacity onPress={shareTrack}><Share2 size={20} color={colors.textSecondary} /></TouchableOpacity>
+        <TouchableOpacity onPress={() => setAutoKnotVisible(true)}>
+          <View style={s.autoKnotBtn}>
+            <Wand2 size={18} color="#FF6D00" />
+            <Text style={s.autoKnotLabel}>Auto</Text>
+          </View>
+        </TouchableOpacity>
         <TouchableOpacity onPress={() => router.push('/queue')}><ListMusic size={20} color={colors.textSecondary} /></TouchableOpacity>
       </View>
+
+      {/* Auto-Knot Bottom Sheet */}
+      <AutoKnotSheet
+        visible={autoKnotVisible}
+        onClose={() => setAutoKnotVisible(false)}
+        songUri={currentTrack.source === 'local' ? (currentTrack.local_uri || '') : (currentTrack.youtube_id || '')}
+        songTitle={currentTrack.title || 'Unknown'}
+        durationMs={currentTrack.duration_ms || duration * 1000}
+        youtubeId={currentTrack.source === 'youtube' ? currentTrack.youtube_id : undefined}
+        onKnotsGenerated={(newKnots, tier) => {
+          setKnots(newKnots);
+          setAutoKnotVisible(false);
+        }}
+      />
     </SafeAreaView>
   );
 }
 
 const s = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.background, paddingHorizontal: spacing.xxl },
-  header: { flexDirection: 'row', alignItems: 'center', marginTop: spacing.sm, marginBottom: spacing.xl },
+  safe: { flex: 1, backgroundColor: colors.background, paddingBottom: spacing.md },
+  header: { flexDirection: 'row', alignItems: 'center', marginTop: spacing.xs, marginBottom: spacing.md, paddingHorizontal: spacing.xxl },
   headerBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
   headerCenter: { flex: 1, alignItems: 'center' },
   headerLabel: { fontFamily: typography.fontFamily.bold, fontSize: 10, color: colors.textSecondary, letterSpacing: 1.5 },
   headerSource: { fontFamily: typography.fontFamily.semibold, fontSize: typography.size.sm, color: colors.text, marginTop: 2 },
-  artWrap: { alignItems: 'center', marginBottom: spacing.xl },
+  artWrap: { alignItems: 'center', marginBottom: spacing.md, paddingHorizontal: spacing.xxl },
   art: { width: ART_SIZE, height: ART_SIZE, borderRadius: borderRadius.xl, backgroundColor: colors.surfaceContainerLow },
-  info: { marginBottom: spacing.lg },
+  info: { marginBottom: spacing.sm, paddingHorizontal: spacing.xxl },
   titleRow: { flexDirection: 'row', alignItems: 'flex-start' },
   title: { fontFamily: typography.fontFamily.bold, fontSize: typography.size.xxl, color: colors.text, letterSpacing: -0.5 },
   artist: { fontFamily: typography.fontFamily.body, fontSize: typography.size.md, color: colors.textSecondary, marginTop: 4 },
-  knotBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surfaceContainerLow, borderRadius: borderRadius.full, paddingHorizontal: 14, paddingVertical: 8, marginTop: 12, alignSelf: 'flex-start' },
+  knotBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surfaceContainerLow, borderRadius: borderRadius.full, paddingHorizontal: 14, paddingVertical: 6, marginTop: 8, alignSelf: 'flex-start' },
   knotDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.primaryContainer, marginRight: 8 },
   knotText: { fontFamily: typography.fontFamily.semibold, fontSize: typography.size.xs, color: colors.text, flex: 1 },
   knotEdit: { fontFamily: typography.fontFamily.bold, fontSize: 10, color: colors.primary, letterSpacing: 1, marginLeft: 8 },
@@ -427,15 +488,17 @@ const s = StyleSheet.create({
   progressFill: { height: 4, borderRadius: 2 },
   timeRow: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 24, marginTop: 4, zIndex: 20 },
   time: { fontFamily: typography.fontFamily.body, fontSize: typography.size.xs, color: colors.textSecondary },
-  controls: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginBottom: spacing.xxxl, zIndex: 20 },
-  sideControl: { padding: 12 },
-  skipBtn: { padding: 16 },
-  playBtn: { marginHorizontal: 12 },
-  playGradient: { width: 72, height: 72, borderRadius: 36, justifyContent: 'center', alignItems: 'center' },
-  bottomActions: { flexDirection: 'row', justifyContent: 'space-around', paddingHorizontal: spacing.hero },
+  controls: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginBottom: spacing.md, zIndex: 20 },
+  sideControl: { padding: 10 },
+  skipBtn: { padding: 12 },
+  playBtn: { marginHorizontal: 8 },
+  playGradient: { width: 64, height: 64, borderRadius: 32, justifyContent: 'center', alignItems: 'center' },
+  bottomActions: { flexDirection: 'row', justifyContent: 'space-around', paddingHorizontal: spacing.hero, alignItems: 'center', paddingBottom: spacing.md },
+  autoKnotBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: 'rgba(255,109,0,0.1)', paddingHorizontal: 14, paddingVertical: 7, borderRadius: 18, borderWidth: 1.5, borderColor: 'rgba(255,109,0,0.3)' },
+  autoKnotLabel: { fontFamily: typography.fontFamily.bold, fontSize: 12, color: '#FF6D00' },
 
   // Knot controls
-  knotActionRow: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 10, marginTop: 12, marginBottom: 4, zIndex: 20 },
+  knotActionRow: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 10, marginTop: 8, marginBottom: 2, zIndex: 20 },
   knotActionBtn: {
     paddingHorizontal: 14, paddingVertical: 7, borderRadius: 18,
     backgroundColor: colors.surfaceContainerHigh, borderWidth: 1.5, borderColor: 'transparent'
@@ -458,8 +521,64 @@ const s = StyleSheet.create({
   },
   knotCountRow: {
     flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 12,
-    marginBottom: 16
+    marginBottom: 8
   },
   knotCountText: { fontFamily: typography.fontFamily.body, fontSize: 11, color: colors.textSecondary },
   knotClearText: { fontFamily: typography.fontFamily.semibold, fontSize: 11, color: '#FF6D00' },
+  
+  // Background Knotting UI
+
+  knottingStatusRow: {
+    alignItems: 'center',
+    marginTop: 12,
+    marginBottom: 4,
+    height: 40,
+    justifyContent: 'center',
+    zIndex: 30, // Higher than seekbar to ensure clickability
+  },
+  statusLoadingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#000',
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: '#FF6D00',
+    minWidth: '80%',
+    justifyContent: 'center',
+  },
+  orangeDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#FF6D00'
+  },
+  statusText: {
+    fontFamily: typography.fontFamily.bold,
+    fontSize: 10,
+    color: '#FF6D00',
+    letterSpacing: 1,
+    textTransform: 'uppercase'
+  },
+  applyKnotsBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#E65100',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+  },
+  applyKnotsText: {
+    fontFamily: typography.fontFamily.bold,
+    fontSize: 10,
+    color: '#FFF'
+  }
 });

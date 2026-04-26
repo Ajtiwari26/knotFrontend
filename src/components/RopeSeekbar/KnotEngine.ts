@@ -19,7 +19,7 @@ export interface KnotSegment {
 }
 
 const { width: SCREEN_W } = Dimensions.get('window');
-const SLIDER_W = SCREEN_W - 42;
+const SLIDER_W = SCREEN_W - 48; // 24px margin each side
 const ROPE_Y = 28;
 
 export type HitZone = 'loop' | 'active_knot' | 'loose_rope' | 'rope';
@@ -103,7 +103,7 @@ export const KnotEngine = {
       if (!k.active) continue;
 
       const sVal = Math.min(k.startTime, k.endTime);
-      const tieX = KnotEngine._findTieX(sVal, segs);
+      const tieX = KnotEngine.timeToVisualX(sVal, segs, duration);
       const d = dropFunc(k, duration, true);
 
       const loopBottom = ROPE_Y + 6 + d;
@@ -126,7 +126,7 @@ export const KnotEngine = {
       if (!k.active) continue;
 
       const sVal = Math.min(k.startTime, k.endTime);
-      const tieX = KnotEngine._findTieX(sVal, segs);
+      const tieX = KnotEngine.timeToVisualX(sVal, segs, duration);
 
       const dx = Math.abs(x - tieX);
       const dy = Math.abs(y - ROPE_Y);
@@ -166,24 +166,5 @@ export const KnotEngine = {
     }
 
     return bestHit;
-  },
-
-  /**
-   * Find the tieX for a knot by finding the segment whose t2 is closest to sVal.
-   * Uses closest-match instead of exact equality to avoid floating-point misses.
-   */
-  _findTieX: (sVal: number, segs: KnotSegment[]): number => {
-    let bestSeg: KnotSegment | null = null;
-    let bestDist = Infinity;
-
-    for (const seg of segs) {
-      const dist = Math.abs(seg.t2 - sVal);
-      if (dist < bestDist) {
-        bestDist = dist;
-        bestSeg = seg;
-      }
-    }
-
-    return bestSeg ? bestSeg.x2 : 0;
   },
 };

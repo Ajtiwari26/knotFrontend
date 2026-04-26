@@ -17,11 +17,11 @@ export { Knot };
 
 // ─── CONSTANTS ───────────────────────────────────────────
 const { width } = Dimensions.get('window');
-const SLIDER_W = width - 42; // Match KnotEngine
-const MIN_DROP = 25;
-const MAX_DROP = 195;
+const SLIDER_W = width - 48; // Match KnotEngine (24px margin)
+const MIN_DROP = 20;
+const MAX_DROP = 100; // Significantly reduced to prevent overlap with buttons below
 const ROPE_Y = 28; // Match KnotEngine
-const CONTAINER_H = 145;
+const CONTAINER_H = 120; // Reduced to tighten vertical layout
 const THICK = 12; // Slightly thicker per previous preference
 const KNOB_R = 7;
 const SHRINK_INTENSITY = 0.3; // Reduced from 0.8 to keep rope longer
@@ -122,8 +122,13 @@ export function RopeSeekbar({
   const baseVisualWidth = SLIDER_W * (1 - (duration > 0 ? (activeKnotDuration / duration) * SHRINK_INTENSITY : 0));
 
   // 3. Ensure minimum width for each segment
-  // We allow the very first segment (t=0) to have 0 min-width so knots can sit at the start
-  const totalMinW = rawSegs.reduce((sum, rs) => sum + (rs.t1 === 0 ? 0 : MIN_ROPE_SEG_W), 0);
+  // We allow the very first segment (t=0) and the very last segment to have 0 min-width
+  // so knots can sit cleanly at the extreme edges.
+  const totalMinW = rawSegs.reduce((sum, rs) => {
+    const isEdge = rs.t1 === 0 || rs.t2 >= duration - 0.1;
+    return sum + (isEdge ? 0 : MIN_ROPE_SEG_W);
+  }, 0);
+
   const flexibleWidth = Math.max(0, baseVisualWidth - totalMinW);
   const totalRopeDuration = rawSegs.reduce((sum, s) => sum + (s.t2 - s.t1), 0);
 
@@ -132,7 +137,8 @@ export function RopeSeekbar({
 
   for (const rs of rawSegs) {
     const dur = rs.t2 - rs.t1;
-    const minW = rs.t1 === 0 ? 0 : MIN_ROPE_SEG_W;
+    const isEdge = rs.t1 === 0 || rs.t2 >= duration - 0.1;
+    const minW = isEdge ? 0 : MIN_ROPE_SEG_W;
     // Width = min_width + (proportional share of flexible width)
     const w = minW + (totalRopeDuration > 0 ? (dur / totalRopeDuration) * flexibleWidth : 0);
     segs.push({ x1: visualX, y1: ROPE_Y, x2: visualX + w, y2: ROPE_Y, t1: rs.t1, t2: rs.t2, isLoose: rs.isLoose });
@@ -141,7 +147,7 @@ export function RopeSeekbar({
 
   const px = KnotEngine.timeToVisualX(displayPos, segs, duration);
   const knobInKnot = sorted.some(k => k.active && displayPos > k.s + 0.1 && displayPos < k.e - 0.1);
-  const svgH = ROPE_Y + MAX_DROP + 40;
+  const svgH = ROPE_Y + MAX_DROP + 20;
 
   // ─── REFS FOR GESTURE HANDLER ────────────────────────────
   const draggingKnotRef = useRef(draggingKnot);
@@ -310,7 +316,7 @@ export function RopeSeekbar({
   // ═════════════════════════════════════════════════════════
   return (
     <View style={s.box}>
-      <View {...pan.panHandlers} style={[s.svg, { height: svgH, width: width }]}>
+      <View {...pan.panHandlers} style={[s.svg, { height: CONTAINER_H, width: width }]}>
         <Svg width={width} height={svgH} pointerEvents="none">
           <Defs>
             <SvgGrad id="rBase" x1="0" y1="0" x2="0" y2="1">
@@ -375,15 +381,18 @@ export function RopeSeekbar({
             {/* === ACTIVE KNOT LOOPS (using KnotRenderer) === */}
             {sorted.map((k, i) => {
               if (!k.active) return null;
-              const segIdx = segs.findIndex(seg => Math.abs(seg.t2 - k.s) < 0.01);
-              if (segIdx === -1) return null;
 
-              const tieX = segs[segIdx].x2;
+              const tieX = KnotEngine.timeToVisualX(k.s, segs, duration);
               const tieY = ROPE_Y + 6;
               const d = drop(k, duration, true);
 
-              const leftX = segs[segIdx].x2 - 12;
-              const rightX = segs[segIdx + 1]?.x1 ?? segs[segIdx].x2 + 12;
+              // Find the segment just before the knot (if any)
+              const segBeforeIdx = segs.findIndex(seg => Math.abs(seg.t2 - k.s) < 0.01);
+              // Find the segment just after the knot (if any)
+              const segAfterIdx = segs.findIndex(seg => Math.abs(seg.t1 - k.e) < 0.01);
+
+              const leftX = segBeforeIdx !== -1 ? segs[segBeforeIdx].x2 - 12 : tieX - 12;
+              const rightX = segAfterIdx !== -1 ? segs[segAfterIdx].x1 + 12 : tieX + 12;
 
               // Knot size proportional to duration
               const knotSize = Math.min(Math.max((k.e - k.s) / (duration * 0.05 || 1), 0.7), 1.4);
@@ -444,6 +453,6 @@ export function RopeSeekbar({
 }
 
 const s = StyleSheet.create({
-  box: { width: '100%', alignItems: 'center', height: CONTAINER_H, zIndex: 10 },
+  box: { width: '100%', alignItems: 'center', height: CONTAINER_H, zIndex: 10, overflow: 'hidden' },
   svg: { position: 'absolute', top: 0 },
 });
