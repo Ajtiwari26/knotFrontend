@@ -108,25 +108,8 @@ export class AudioService {
   }
 
   static async seekToSmoothly(position: number) {
-    // Subtler volume dip (60ms) - don't go to zero to avoid "song ended" feel
-    for (let v = 0.8; v >= 0.15; v -= 0.15) {
-      await TrackPlayer.setVolume(v);
-      await new Promise(r => setTimeout(r, 15));
-    }
-    await TrackPlayer.setVolume(0.15);
-
-    // Perform the jump
+    // Perform the jump directly without volume dropping
     await TrackPlayer.seekTo(position);
-    
-    // Tiny delay
-    await new Promise(r => setTimeout(r, 60));
-
-    // Volume ramp up (200ms)
-    for (let v = 0.3; v <= 1.0; v += 0.2) {
-      await TrackPlayer.setVolume(v);
-      await new Promise(r => setTimeout(r, 40));
-    }
-    await TrackPlayer.setVolume(1.0);
   }
 
   static async playQueueTrack(track: any) {
@@ -136,16 +119,38 @@ export class AudioService {
       await this.playLocal(track.local_uri, track.title, track.artist, track.thumbnail, track.local_uri);
     } else {
       let streamUrl = track.streamUrl;
+      const { getBaseUrl } = require('@/src/config/api');
+      const baseUrl = getBaseUrl();
+
       if (!streamUrl) {
+        // Step 1: Try client-side resolution (bypass Render IP blocks)
         try {
-          const { getBaseUrl } = require('@/src/config/api');
-          const baseUrl = getBaseUrl();
-          streamUrl = `${baseUrl}/api/songs/${track.youtube_id}/stream`;
+          console.log(`[AudioService] Client-side resolution for ${track.youtube_id}...`);
+          const instances = ['https://inv.nadeko.net', 'https://yewtu.be', 'https://invidious.flokinet.to'];
+          for (const instance of instances) {
+            try {
+              const res = await fetch(`${instance}/api/v1/videos/${track.youtube_id}`);
+              if (res.ok) {
+                const data = await res.json();
+                const audio = data.adaptiveFormats?.find((f: any) => f.type?.includes('audio') && !f.type?.includes('video'));
+                if (audio?.url) {
+                  console.log(`[AudioService] Client-side success via ${instance}`);
+                  streamUrl = `${baseUrl}/api/songs/${track.youtube_id}/stream?stream_url=${encodeURIComponent(audio.url)}`;
+                  break;
+                }
+              }
+            } catch (e) { /* continue */ }
+          }
         } catch (e) {
-          console.error('[AudioService] Error constructing stream URL', e);
-          return;
+          console.warn('[AudioService] Client-side resolution failed, falling back to backend extraction.');
+        }
+
+        // Step 2: Fallback to standard backend stream (which now has its own Invidious fallback)
+        if (!streamUrl) {
+          streamUrl = `${baseUrl}/api/songs/${track.youtube_id}/stream`;
         }
       }
+      
       await this.playStream(streamUrl, track.title, track.artist, track.thumbnail, track.youtube_id);
     }
   }

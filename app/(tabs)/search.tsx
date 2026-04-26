@@ -160,9 +160,6 @@ export default function SearchScreen() {
 
   const handlePlayOnline = async (track: any, index: number) => {
     try {
-      const baseUrl = await resolveBaseUrl();
-      const streamUrl = `${baseUrl}/api/songs/${track.youtube_id}/stream`;
-      
       const queueTracks: Track[] = onlineResults.map(r => ({
         youtube_id: r.youtube_id,
         source: 'youtube' as const,
@@ -171,11 +168,12 @@ export default function SearchScreen() {
         thumbnail: r.thumbnail,
         duration_ms: r.duration_ms,
       }));
-      queueTracks[index].streamUrl = streamUrl;
       
       setQueue(queueTracks, index);
       setIsPlaying(true);
-      await AudioService.playStream(streamUrl, track.title, track.artist, track.thumbnail);
+      
+      // playQueueTrack handles the client-side resolution and backend fallback automatically
+      await AudioService.playQueueTrack(queueTracks[index]);
       router.push('/player');
     } catch (e) {
       console.error('Play error:', e);
