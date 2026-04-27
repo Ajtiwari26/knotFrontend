@@ -123,46 +123,24 @@ export class AudioService {
       const baseUrl = getBaseUrl();
 
       if (!streamUrl) {
-        // Step 1: Try client-side resolution (Cluster of Mirrors)
+        const isLocal = baseUrl.includes('localhost') || baseUrl.includes('10.0.2.2');
+        
+        // 1. Try Client-Side Extraction (Residential IP)
         try {
-          console.log(`[AudioService] Client-side resolution for ${track.youtube_id}...`);
-          const instances = [
-            'https://pipedapi.kavin.rocks',
-            'https://api-piped.mha.fi',
-            'https://pipedapi.nerdy.fi',
-            'https://inv.nadeko.net'
-          ];
-
-          for (const instance of instances) {
-            try {
-              console.log(`[AudioService] Trying client-side mirror: ${instance}`);
-              const isPiped = instance.includes('piped');
-              const url = isPiped 
-                ? `${instance}/streams/${track.youtube_id}`
-                : `${instance}/api/v1/videos/${track.youtube_id}`;
-              
-              const res = await fetch(url);
-              if (res.ok) {
-                const data = await res.json();
-                const audioUrl = isPiped
-                  ? data.audioStreams?.find((s: any) => s.bitrate > 100000)?.url
-                  : data.adaptiveFormats?.find((f: any) => f.type?.includes('audio'))?.url;
-
-                if (audioUrl) {
-                  console.log(`[AudioService] Success via ${instance}!`);
-                  streamUrl = `${baseUrl}/api/songs/${track.youtube_id}/stream?stream_url=${encodeURIComponent(audioUrl)}`;
-                  break;
-                }
-              }
-            } catch (e) { /* try next mirror */ }
-          }
+          const { YoutubeExtractor } = require('./YoutubeExtractor');
+          console.log(`[AudioService] Attempting client-side extraction for ${track.youtube_id}...`);
+          streamUrl = await YoutubeExtractor.extract(track.youtube_id);
         } catch (e) {
-          console.warn('[AudioService] Client-side resolution cluster failed:', e);
+          console.warn('[AudioService] Client-side extraction failed:', e);
         }
 
-        // Step 2: Fallback to standard backend stream
+        // 2. Fallback to Backend Extraction (Proxy)
         if (!streamUrl) {
-          console.log('[AudioService] Falling back to backend extraction...');
+          if (isLocal) {
+            console.log('[AudioService] Falling back to Mac backend extraction (local mode)...');
+          } else {
+            console.log('[AudioService] Falling back to backend proxy (production mode)...');
+          }
           streamUrl = `${baseUrl}/api/songs/${track.youtube_id}/stream`;
         }
       }

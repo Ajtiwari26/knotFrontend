@@ -1,10 +1,10 @@
 const PRODUCTION_URL = 'https://knot-kbm1.onrender.com';
-const LOCAL_URL = 'http://10.102.241.38:3001';
+const LOCAL_URL = 'http://localhost:3001';
 
 let _resolvedBaseUrl: string | null = null;
 
 /**
- * Probes the local dev server first. If it responds within 2s, use it.
+ * Probes the local dev server first. If it responds within 3s, use it.
  * Otherwise, fall back to the production Render URL.
  */
 export async function resolveBaseUrl(): Promise<string> {
@@ -12,7 +12,7 @@ export async function resolveBaseUrl(): Promise<string> {
 
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 2000); // 2s timeout for local check
+    const timeout = setTimeout(() => controller.abort(), 3000); // 3s timeout for local check
     const res = await fetch(`${LOCAL_URL}/api/health`, {
       method: 'GET',
       signal: controller.signal,
