@@ -10,7 +10,11 @@ export interface Track {
   youtube_id?: string;       // present for YouTube songs
   local_uri?: string;        // file:// URI for device songs
   filename?: string;         // stable filename for knot matching
-  source: 'youtube' | 'local';
+  pagalworld_url?: string;   // Pagalworld detail page URL
+  pagalworld_metadata?: { year: string; month: string; file: string };
+  pagalfree_url?: string;     // PagalFree detail page URL
+  pagalfree_direct_url?: string; // Direct download link from metadata
+  source: 'youtube' | 'local' | 'pagalworld' | 'pagalfree';
   title: string;
   artist: string;
   thumbnail: string;

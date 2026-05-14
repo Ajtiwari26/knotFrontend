@@ -16,6 +16,7 @@ import { LocalMusicService, LocalTrack } from '@/src/services/LocalMusicService'
 import { AudioService } from '@/src/services/AudioService';
 import { usePlayerStore, Track } from '@/src/store/playerStore';
 import { resolveBaseUrl } from '@/src/config/api';
+import DownloadService from '@/src/services/DownloadService';
 
 const { width } = Dimensions.get('window');
 const GENRES = ['All', 'Pop', 'Rock', 'Hip-Hop', 'Electronic', 'Jazz', 'Classical', 'R&B'];
@@ -45,6 +46,8 @@ export default function SearchScreen() {
   const [searchMode, setSearchMode] = useState<'online' | 'offline'>('online');
   const [localResults, setLocalResults] = useState<LocalTrack[]>([]);
   const [onlineResults, setOnlineResults] = useState<any[]>([]);
+  const [pagalworldResults, setPagalworldResults] = useState<any[]>([]);
+  const [pagalfreeResults, setPagalfreeResults] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
 
   // Player Actions
@@ -68,6 +71,8 @@ export default function SearchScreen() {
     } else {
       setLocalResults([]);
       setOnlineResults([]);
+      setPagalworldResults([]);
+      setPagalfreeResults([]);
     }
   }, [query, searchMode]);
 
@@ -110,6 +115,8 @@ export default function SearchScreen() {
     if (!q) {
       setLocalResults([]);
       setOnlineResults([]);
+      setPagalworldResults([]);
+      setPagalfreeResults([]);
       return;
     }
 
@@ -128,26 +135,53 @@ export default function SearchScreen() {
       // 2. Search Online (if mode is online)
       if (searchMode === 'online') {
         setLoading(true);
-        const baseUrl = await resolveBaseUrl();
-        const res = await fetch(`${baseUrl}/api/songs/search?q=${encodeURIComponent(q)}`);
         
-        // Safety check: if user typed something else while waiting for fetch, abort
-        if (latestQuery.current !== q) {
-          setLoading(false);
-          return;
-        }
+        const fetchYoutube = async () => {
+          try {
+            const baseUrl = await resolveBaseUrl();
+            const res = await fetch(`${baseUrl}/api/songs/search?q=${encodeURIComponent(q)}`);
+            if (latestQuery.current !== q) return;
+            if (res.ok) {
+              const data = await res.json();
+              setOnlineResults(data ? data.slice(0, 8) : []);
+            }
+          } catch (e) {
+            console.warn('[Search] YouTube search failed', e);
+          }
+        };
 
-        if (res.ok) {
-          const data = await res.json();
-          const results = data ? data.slice(0, 8) : [];
-          setOnlineResults(results);
-          console.log(`[Search] Found ${results.length} online results`);
-        } else {
-          console.warn(`[Search] Online search failed: ${res.status}`);
-          setOnlineResults([]);
-        }
+        const fetchPagalworld = async () => {
+          try {
+            const PagalworldService = require('@/src/services/PagalworldService').default;
+            const results = await PagalworldService.search(q);
+            if (latestQuery.current !== q) return;
+            setPagalworldResults(results || []);
+          } catch (e) {
+            console.warn('[Search] Pagalworld search failed', e);
+          }
+        };
+
+        const fetchPagalfree = async () => {
+          try {
+            const PagalfreeService = require('@/src/services/PagalfreeService').default;
+            const results = await PagalfreeService.search(q);
+            if (latestQuery.current !== q) return;
+            setPagalfreeResults(results || []);
+          } catch (e) {
+            console.warn('[Search] Pagalfree search failed', e);
+          }
+        };
+
+        // Fire all in parallel
+        await Promise.all([
+          fetchYoutube(),
+          fetchPagalworld(),
+          fetchPagalfree()
+        ]);
       } else {
         setOnlineResults([]);
+        setPagalworldResults([]);
+        setPagalfreeResults([]);
       }
     } catch (e) {
       console.error('[Search] Search error:', e);
@@ -172,11 +206,54 @@ export default function SearchScreen() {
       setQueue(queueTracks, index);
       setIsPlaying(true);
       
-      // playQueueTrack handles the client-side resolution and backend fallback automatically
       await AudioService.playQueueTrack(queueTracks[index]);
       router.push('/player');
     } catch (e) {
       console.error('Play error:', e);
+      alert(`Playback Error: ${(e as Error).message}`);
+    }
+  };
+
+  const handlePlayPagalworld = async (track: any, index: number) => {
+    try {
+      const queueTracks: Track[] = pagalworldResults.map(r => ({
+        pagalworld_url: r.url,
+        source: 'pagalworld' as const,
+        title: r.title,
+        artist: r.artist || 'Pagalworld',
+        thumbnail: r.imageUrl || '',
+        duration_ms: 0, // Metadata will be fetched on play
+      }));
+      
+      setQueue(queueTracks, index);
+      setIsPlaying(true);
+      
+      await AudioService.playQueueTrack(queueTracks[index]);
+      router.push('/player');
+    } catch (e) {
+      console.error('Pagalworld play error:', e);
+      alert(`Playback Error: ${(e as Error).message}`);
+    }
+  };
+
+  const handlePlayPagalfree = async (track: any, index: number) => {
+    try {
+      const queueTracks: Track[] = pagalfreeResults.map(r => ({
+        pagalfree_url: r.url,
+        source: 'pagalfree' as const,
+        title: r.title,
+        artist: r.artist || 'Pagalfree',
+        thumbnail: r.imageUrl || '',
+        duration_ms: 0, // Metadata will be fetched on play
+      }));
+      
+      setQueue(queueTracks, index);
+      setIsPlaying(true);
+      
+      await AudioService.playQueueTrack(queueTracks[index]);
+      router.push('/player');
+    } catch (e) {
+      console.error('Pagalfree play error:', e);
       alert(`Playback Error: ${(e as Error).message}`);
     }
   };
@@ -335,30 +412,83 @@ export default function SearchScreen() {
             )}
 
             {searchMode === 'online' && (
-              <View style={s.section}>
-                <Text style={s.sectionTitle}>YouTube Results</Text>
-                {loading && onlineResults.length === 0 ? (
-                  <ActivityIndicator size="small" color={colors.primary} style={{ marginTop: 10 }} />
-                ) : (
-                  onlineResults.map((r, i) => (
-                    <TrackItem 
-                      key={r.youtube_id} 
-                      title={r.title} 
-                      artist={r.artist} 
-                      thumbnail={r.thumbnail} 
-                      duration={Math.floor(r.duration_ms / 60000) + ':' + String(Math.floor((r.duration_ms % 60000) / 1000)).padStart(2, '0')} 
-                      showMore 
-                      onPress={() => handlePlayOnline(r, i)} 
-                    />
-                  ))
+              <>
+                {onlineResults.length > 0 && (
+                  <View style={s.section}>
+                    <Text style={s.sectionTitle}>YouTube Results</Text>
+                    {onlineResults.map((r, i) => (
+                      <TrackItem 
+                        key={r.youtube_id} 
+                        title={r.title} 
+                        artist={r.artist} 
+                        thumbnail={r.thumbnail} 
+                        duration={Math.floor(r.duration_ms / 60000) + ':' + String(Math.floor((r.duration_ms % 60000) / 1000)).padStart(2, '0')} 
+                        showMore 
+                        onPress={() => handlePlayOnline(r, i)} 
+                      />
+                    ))}
+                  </View>
                 )}
-                {loading && onlineResults.length > 0 && (
-                  <ActivityIndicator size="small" color={colors.primary} style={{ marginTop: 10 }} />
+
+                {pagalworldResults.length > 0 && (
+                  <View style={s.section}>
+                    <Text style={s.sectionTitle}>Pagalworld Results</Text>
+                    {pagalworldResults.map((r, i) => (
+                      <TrackItem 
+                        key={`pw-${i}`} 
+                        title={r.title} 
+                        artist={r.artist || 'Pagalworld'} 
+                        thumbnail={r.imageUrl} 
+                        duration="--:--" 
+                        showMore 
+                        onPress={() => handlePlayPagalworld(r, i)} 
+                        onDownload={() => DownloadService.downloadTrack({
+                          pagalworld_url: r.url,
+                          source: 'pagalworld',
+                          title: r.title,
+                          artist: r.artist || 'Pagalworld',
+                          thumbnail: r.imageUrl || '',
+                          duration_ms: 0
+                        })}
+                      />
+                    ))}
+                  </View>
                 )}
-              </View>
+
+                {pagalfreeResults.length > 0 && (
+                  <View style={s.section}>
+                    <Text style={s.sectionTitle}>Pagalfree Results</Text>
+                    {pagalfreeResults.map((r, i) => (
+                      <TrackItem 
+                        key={`pf-${i}`} 
+                        title={r.title} 
+                        artist={r.artist || 'Pagalfree'} 
+                        thumbnail={r.imageUrl} 
+                        duration="--:--" 
+                        showMore 
+                        onPress={() => handlePlayPagalfree(r, i)} 
+                        onDownload={() => DownloadService.downloadTrack({
+                          pagalfree_url: r.url,
+                          source: 'pagalfree',
+                          title: r.title,
+                          artist: r.artist || 'Pagalfree',
+                          thumbnail: r.imageUrl || '',
+                          duration_ms: 0
+                        })}
+                      />
+                    ))}
+                  </View>
+                )}
+
+                {loading && onlineResults.length === 0 && pagalworldResults.length === 0 && pagalfreeResults.length === 0 && (
+                  <ActivityIndicator size="small" color={colors.primary} style={{ marginTop: 20 }} />
+                )}
+              </>
             )}
 
-            {!loading && query.trim().length > 0 && localResults.length === 0 && (searchMode === 'offline' || onlineResults.length === 0) && (
+            {!loading && query.trim().length > 0 && localResults.length === 0 && 
+              ((searchMode === 'offline') || 
+               (searchMode === 'online' && onlineResults.length === 0 && pagalworldResults.length === 0 && pagalfreeResults.length === 0)) && (
               <Text style={s.emptyText}>No results found for "{query}"</Text>
             )}
           </>

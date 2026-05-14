@@ -117,6 +117,68 @@ export class AudioService {
 
     if (track.source === 'local') {
       await this.playLocal(track.local_uri, track.title, track.artist, track.thumbnail, track.local_uri);
+    } else if (track.source === 'pagalworld') {
+      let streamUrl = track.streamUrl;
+      
+      if (!streamUrl) {
+        try {
+          const PagalworldService = require('./PagalworldService').default;
+          console.log(`[AudioService] Fetching metadata for Pagalworld song: ${track.title}...`);
+          
+          let metadata = track.pagalworld_metadata;
+          if (!metadata && track.pagalworld_url) {
+            metadata = await PagalworldService.getMetadata(track.pagalworld_url);
+          }
+
+          if (metadata) {
+            if (metadata.title) track.title = metadata.title;
+            if (metadata.artist) track.artist = metadata.artist;
+
+            streamUrl = PagalworldService.getStreamUrl(metadata);
+          } else {
+            throw new Error('Could not resolve Pagalworld metadata');
+          }
+        } catch (e) {
+          console.error('[AudioService] Pagalworld resolution failed:', e);
+          throw e;
+        }
+      }
+      
+      await this.playStream(streamUrl, track.title, track.artist, track.thumbnail, track.pagalworld_url || 'pagalworld-stream');
+    } else if (track.source === 'pagalfree') {
+      let streamUrl = track.streamUrl;
+
+      if (!streamUrl) {
+        try {
+          const PagalfreeService = require('./PagalfreeService').default;
+          console.log(`[AudioService] Fetching metadata for Pagalfree song: ${track.title}...`);
+
+          let directUrl = track.pagalfree_direct_url;
+          if (!directUrl && track.pagalfree_url) {
+            const metadata = await PagalfreeService.getMetadata(track.pagalfree_url);
+            if (metadata && metadata.downloadLinks.length > 0) {
+              // Prefer 320kbps, then 128kbps, then whatever is first
+              const bestLink = metadata.downloadLinks.find((l: any) => l.quality === '320kbps') || 
+                               metadata.downloadLinks.find((l: any) => l.quality === '128kbps') || 
+                               metadata.downloadLinks[0];
+              directUrl = bestLink.url;
+              if (metadata.title) track.title = metadata.title;
+              if (metadata.artist) track.artist = metadata.artist;
+            }
+          }
+
+          if (directUrl) {
+            streamUrl = PagalfreeService.getStreamUrl(directUrl);
+          } else {
+            throw new Error('Could not resolve Pagalfree download link');
+          }
+        } catch (e) {
+          console.error('[AudioService] Pagalfree resolution failed:', e);
+          throw e;
+        }
+      }
+
+      await this.playStream(streamUrl, track.title, track.artist, track.thumbnail, track.pagalfree_url || 'pagalfree-stream');
     } else {
       let streamUrl = track.streamUrl;
       const { getBaseUrl } = require('@/src/config/api');
