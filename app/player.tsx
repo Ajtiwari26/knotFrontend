@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, Dimensions, Share } from 'rea
 import { Artwork } from '@/src/components/Artwork';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { ChevronDown, Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Heart, ListMusic, Share2, Scissors, X, Wand2 } from 'lucide-react-native';
+import { ChevronDown, Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Heart, ListMusic, Share2, Scissors, X, Wand2, Download } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { colors } from '@/src/theme/colors';
 import { typography } from '@/src/theme/typography';
@@ -16,6 +16,7 @@ import { RopeSeekbar, Knot } from '@/src/components/RopeSeekbar';
 import { useLibraryStore } from '@/src/store/libraryStore';
 import { AutoKnotSheet } from '@/src/components/AutoKnotSheet';
 import { AutoKnotTier } from '@/src/services/AutoKnotService';
+import DownloadService from '@/src/services/DownloadService';
 
 const { width } = Dimensions.get('window');
 const ART_SIZE = width - 150; // More aggressive reduction for better vertical fit
@@ -439,6 +440,7 @@ export default function PlayerScreen() {
 
       {/* Bottom Actions */}
       <View style={s.bottomActions}>
+        <TouchableOpacity onPress={() => DownloadService.downloadTrack(currentTrack)}><Download size={20} color={colors.textSecondary} /></TouchableOpacity>
         <TouchableOpacity onPress={shareTrack}><Share2 size={20} color={colors.textSecondary} /></TouchableOpacity>
         <TouchableOpacity onPress={() => setAutoKnotVisible(true)}>
           <View style={s.autoKnotBtn}>

@@ -22,6 +22,7 @@ import CustomSplashScreen from '@/components/SplashScreen';
 SplashScreen.preventAutoHideAsync();
 
 import { GlobalPlayerController } from '@/src/components/GlobalPlayerController';
+import { HeadlessYoutubeExtractor } from '@/src/components/HeadlessYoutubeExtractor';
 
 export default function RootLayout() {
   const [loaded, error] = useFonts({
@@ -77,6 +78,7 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <StatusBar style="dark" />
       <GlobalPlayerController />
+      <HeadlessYoutubeExtractor />
       <Stack
         screenOptions={{
           headerShown: false,

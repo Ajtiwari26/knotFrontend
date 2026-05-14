@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { Artwork } from './Artwork';
-import { Play, Heart, MoreHorizontal } from 'lucide-react-native';
+import { Play, Heart, MoreHorizontal, Download } from 'lucide-react-native';
 import { colors } from '../theme/colors';
 import { typography } from '../theme/typography';
 import { borderRadius } from '../theme/spacing';
@@ -16,6 +16,7 @@ interface TrackItemProps {
   showMore?: boolean;
   onPress?: () => void;
   onPlay?: () => void;
+  onDownload?: () => void;
 }
 
 export const TrackItem = ({
@@ -28,6 +29,7 @@ export const TrackItem = ({
   showMore = false,
   onPress,
   onPlay,
+  onDownload,
 }: TrackItemProps) => {
   return (
     <TouchableOpacity style={styles.container} onPress={onPress} activeOpacity={0.7}>
@@ -52,6 +54,11 @@ export const TrackItem = ({
         {showHeart && (
           <TouchableOpacity style={styles.actionBtn}>
             <Heart size={18} color={colors.primary} />
+          </TouchableOpacity>
+        )}
+        {onDownload && (
+          <TouchableOpacity style={styles.actionBtn} onPress={onDownload}>
+            <Download size={18} color={colors.textSecondary} />
           </TouchableOpacity>
         )}
         {showMore && (
