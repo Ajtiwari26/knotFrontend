@@ -1,10 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import TrackPlayer, { useProgress } from 'react-native-track-player';
+import { useRouter } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { usePlayerStore } from '../store/playerStore';
 import { KnotService } from '../services/KnotService';
 import { AudioService } from '../services/AudioService';
 
 export const GlobalPlayerController = () => {
+  const router = useRouter();
   const currentTrack = usePlayerStore(state => state.currentTrack);
   const knots = usePlayerStore(state => state.knots);
   const setKnots = usePlayerStore(state => state.setKnots);
@@ -23,7 +26,12 @@ export const GlobalPlayerController = () => {
         return;
       }
 
-      const songKey = currentTrack.source === 'local' ? currentTrack.local_uri : currentTrack.youtube_id;
+      let songKey = '';
+      if (currentTrack.source === 'local') songKey = currentTrack.local_uri || '';
+      else if (currentTrack.source === 'youtube') songKey = currentTrack.youtube_id || '';
+      else if (currentTrack.source === 'pagalworld') songKey = currentTrack.pagalworld_url || '';
+      else if (currentTrack.source === 'pagalfree') songKey = currentTrack.pagalfree_url || '';
+      else if (currentTrack.source === 'jiosaavn') songKey = currentTrack.jiosaavn_token || '';
       if (songKey) {
         let savedKnot = await KnotService.getSavedKnot(songKey);
 
@@ -73,7 +81,6 @@ export const GlobalPlayerController = () => {
 
     for (const knot of knots) {
       // Logic: If we reach the knot startTime, smoothly jump to endTime
-      // Using the 1.0s buffer added in the engine to mask the transition
       if (knot.active && position >= knot.startTime && position < knot.endTime - 0.2) {
         setLastSeekPos(knot.endTime);
         AudioService.seekToSmoothly(knot.endTime);
@@ -81,6 +88,49 @@ export const GlobalPlayerController = () => {
       }
     }
   }, [position, knots]);
+
+  // Hydrate TrackPlayer with persisted track on startup if native queue is empty
+  useEffect(() => {
+    const hydratePlayerOnBoot = async () => {
+      if (!currentTrack) return;
+      try {
+        await AudioService.setupPlayer();
+        const queue = await TrackPlayer.getQueue();
+        if (queue.length === 0) {
+          console.log('[GlobalPlayerController] Boot-time hydration: checking persisted track state:', currentTrack.title);
+          const isPlayingPersisted = usePlayerStore.getState().isPlaying;
+          
+          if (isPlayingPersisted) {
+            console.log('[GlobalPlayerController] Track was playing when closed. Auto-playing and seeking...');
+            await AsyncStorage.setItem('restore_saved_position_flag', 'true');
+            await AudioService.playQueueTrack(currentTrack);
+            
+            setTimeout(() => {
+              try {
+                router.push('/player');
+              } catch (navErr) {
+                console.warn('[GlobalPlayerController] Navigation to player failed:', navErr);
+              }
+            }, 500);
+          } else {
+            console.log('[GlobalPlayerController] Track was paused when closed. Adding placeholder.');
+            const trackId = currentTrack.source === 'local' ? currentTrack.local_uri : (currentTrack.youtube_id || currentTrack.jiosaavn_token || currentTrack.pagalworld_url || currentTrack.pagalfree_url || 'knot-track');
+            await TrackPlayer.add({
+              id: trackId,
+              url: 'https://placeholder.invalid',
+              title: currentTrack.title,
+              artist: currentTrack.artist,
+              artwork: currentTrack.thumbnail || undefined,
+            });
+            await TrackPlayer.pause();
+          }
+        }
+      } catch (err) {
+        console.warn('[GlobalPlayerController] Boot-time TrackPlayer hydration failed:', err);
+      }
+    };
+    hydratePlayerOnBoot();
+  }, [currentTrack]);
 
   return null; // This component doesn't render anything
 };

@@ -26,11 +26,11 @@ export const PlayerBar = ({
   
   const isPlaying = playbackState.state === State.Playing;
   
-  if (!activeTrack || !currentTrack) return null;
+  if (!currentTrack) return null;
 
-  const title = currentTrack.title || activeTrack.title || 'Unknown Track';
-  const artist = currentTrack.artist || activeTrack.artist || 'Unknown Artist';
-  const thumbnail = currentTrack.thumbnail || (typeof activeTrack.artwork === 'string' ? activeTrack.artwork : undefined);
+  const title = currentTrack.title || activeTrack?.title || 'Unknown Track';
+  const artist = currentTrack.artist || activeTrack?.artist || 'Unknown Artist';
+  const thumbnail = currentTrack.thumbnail || (typeof activeTrack?.artwork === 'string' ? activeTrack?.artwork : undefined);
 
   return (
     <TouchableOpacity

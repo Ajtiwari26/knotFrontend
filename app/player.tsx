@@ -17,6 +17,57 @@ import { useLibraryStore } from '@/src/store/libraryStore';
 import { AutoKnotSheet } from '@/src/components/AutoKnotSheet';
 import { AutoKnotTier } from '@/src/services/AutoKnotService';
 import DownloadService from '@/src/services/DownloadService';
+import Svg, { Path, Polyline, Line, Defs, LinearGradient as SvgLinearGradient, Stop } from 'react-native-svg';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+interface DownloadIconProps {
+  progress?: number;
+  color: string;
+  size: number;
+}
+
+const DownloadIcon = ({ progress, color, size }: DownloadIconProps) => {
+  const isDownloading = progress !== undefined && progress !== null && progress > 0 && progress < 1;
+  const isDownloaded = progress === 1 || color === "#FF6D00";
+
+  // Use gradient if downloading, otherwise solid color
+  const strokeColor = isDownloaded 
+    ? "#FF6D00" 
+    : isDownloading 
+      ? "url(#download-progress-grad)" 
+      : color;
+
+  const progressPercent = isDownloading ? `${Math.min(100, Math.max(0, progress * 100))}%` : "0%";
+
+  return (
+    <View style={{ width: size, height: size, justifyContent: 'center', alignItems: 'center' }}>
+      <Svg
+        width={size}
+        height={size}
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke={strokeColor}
+        strokeWidth={2.5}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        {isDownloading && (
+          <Defs>
+            <SvgLinearGradient id="download-progress-grad" x1="0" y1="0" x2="0" y2="1">
+              <Stop offset="0%" stopColor="#FF6D00" />
+              <Stop offset={progressPercent} stopColor="#FF6D00" />
+              <Stop offset={progressPercent} stopColor={color} />
+              <Stop offset="100%" stopColor={color} />
+            </SvgLinearGradient>
+          </Defs>
+        )}
+        <Path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+        <Polyline points="7 10 12 15 17 10" />
+        <Line x1="12" x2="12" y1="15" y2="3" />
+      </Svg>
+    </View>
+  );
+};
 
 const { width } = Dimensions.get('window');
 const ART_SIZE = width - 150; // More aggressive reduction for better vertical fit
@@ -34,6 +85,38 @@ export default function PlayerScreen() {
   const playbackState = usePlaybackState();
   const activeTrack = useActiveTrack();
   const isPlaying = playbackState?.state === State.Playing;
+
+  const [isDownloaded, setIsDownloaded] = useState(false);
+  const downloadProgress = usePlayerStore(state => state.downloadProgress);
+  const songKey = currentTrack ? (currentTrack.youtube_id || currentTrack.pagalworld_url || currentTrack.pagalfree_url || currentTrack.jiosaavn_token) : null;
+  const activeProgress = songKey ? downloadProgress[songKey] : undefined;
+
+  useEffect(() => {
+    const checkDownloaded = async () => {
+      if (!currentTrack) {
+        setIsDownloaded(false);
+        return;
+      }
+      if (currentTrack.source === 'local') {
+        setIsDownloaded(true);
+        return;
+      }
+      const trackKey = currentTrack.youtube_id || currentTrack.pagalworld_url || currentTrack.pagalfree_url || currentTrack.jiosaavn_token;
+      if (trackKey) {
+        const existing = await AsyncStorage.getItem(`downloaded_track_${trackKey}`);
+        setIsDownloaded(!!existing);
+      } else {
+        setIsDownloaded(false);
+      }
+    };
+    checkDownloaded();
+  }, [currentTrack]);
+
+  useEffect(() => {
+    if (activeProgress === 1.0) {
+      setIsDownloaded(true);
+    }
+  }, [activeProgress]);
 
   // Sync store with native player if store is empty but player is active
   useEffect(() => {
@@ -85,22 +168,32 @@ export default function PlayerScreen() {
   useEffect(() => {
     const save = async () => {
       if (!currentTrack) return;
-      if (knots.length === 0) return;
-      const songKey = currentTrack.source === 'local' ? currentTrack.local_uri : currentTrack.youtube_id;
-      if (songKey) {
-        const knotData = {
-          _id: songKey,
-          name: 'Saved Loop',
-          junctions: knots.map(k => ({ start_ms: k.startTime * 1000, end_ms: k.endTime * 1000 })),
-          knotted_duration_ms: 0,
-          original_duration_ms: currentTrack.duration_ms,
-        };
-        await KnotService.saveKnot(songKey, knotData);
+      const songKey = currentTrack.source === 'local' 
+        ? currentTrack.local_uri 
+        : (currentTrack.youtube_id || currentTrack.pagalworld_url || currentTrack.pagalfree_url || currentTrack.jiosaavn_token);
+      if (!songKey) return;
 
-        // Sync to backend for cross-install persistence
-        if (currentTrack.source === 'local') {
-          KnotService.syncToBackend(currentTrack, knotData);
-        }
+      if (knots.length === 0) {
+        // User cleared all knots — delete from storage so they don't come back as phantoms
+        await KnotService.deleteKnot(songKey);
+        usePlayerStore.getState().setActiveKnot(null);
+        return;
+      }
+
+      const knotData = {
+        _id: songKey,
+        name: 'Saved Loop',
+        junctions: knots.map(k => ({ start_ms: k.startTime * 1000, end_ms: k.endTime * 1000 })),
+        knotted_duration_ms: 0,
+        original_duration_ms: currentTrack.duration_ms,
+        title: currentTrack.title,
+        artist: currentTrack.artist,
+      };
+      await KnotService.saveKnot(songKey, knotData);
+
+      // Sync to backend for cross-install persistence
+      if (currentTrack.source === 'local') {
+        KnotService.syncToBackend(currentTrack, knotData);
       }
     };
     save();
@@ -211,10 +304,20 @@ export default function PlayerScreen() {
     setKnots(prev => prev.filter((_, i) => i !== index));
   };
 
-  const handleClearKnots = () => {
+  const handleClearKnots = async () => {
     setKnots([]);
     setPendingA(null);
     setPendingB(null);
+    // Immediately delete from persistent storage
+    if (currentTrack) {
+      const songKey = currentTrack.source === 'local' 
+        ? currentTrack.local_uri 
+        : (currentTrack.youtube_id || currentTrack.pagalworld_url || currentTrack.pagalfree_url || currentTrack.jiosaavn_token);
+      if (songKey) {
+        await KnotService.deleteKnot(songKey);
+        usePlayerStore.getState().setActiveKnot(null);
+      }
+    }
   };
 
   const handleUndoLastKnot = () => {
@@ -418,8 +521,18 @@ export default function PlayerScreen() {
 
       {/* Transport Controls */}
       <View style={s.controls}>
-        <TouchableOpacity style={s.sideControl} onPress={toggleShuffle}>
-          <Shuffle size={20} color={shuffle ? colors.primary : colors.textSecondary} />
+        <TouchableOpacity 
+          style={[
+            styles.cycleBtn,
+            (isDownloaded || (activeProgress !== undefined && activeProgress > 0)) && styles.cycleBtnActive
+          ]} 
+          onPress={() => DownloadService.downloadTrack(currentTrack)}
+        >
+          <DownloadIcon 
+            progress={activeProgress} 
+            color={isDownloaded ? "#FF6D00" : colors.textSecondary} 
+            size={32} 
+          />
         </TouchableOpacity>
         <TouchableOpacity style={s.skipBtn} onPress={handlePrev}>
           <SkipBack size={28} color={colors.text} fill={colors.text} />
@@ -432,30 +545,50 @@ export default function PlayerScreen() {
         <TouchableOpacity style={s.skipBtn} onPress={handleNext}>
           <SkipForward size={28} color={colors.text} fill={colors.text} />
         </TouchableOpacity>
-        <TouchableOpacity style={s.sideControl} onPress={toggleRepeat}>
-          <Repeat size={20} color={repeatMode !== 'off' ? colors.primary : colors.textSecondary} />
-          {repeatMode === 'track' && <Text style={{ position: 'absolute', color: colors.primary, fontSize: 10, fontWeight: 'bold' }}>1</Text>}
+        <TouchableOpacity 
+          style={[
+            styles.cycleBtn, 
+            (repeatMode !== 'off' || shuffle) && styles.cycleBtnActive
+          ]} 
+          onPress={() => usePlayerStore.getState().cyclePlaybackMode()}
+        >
+          {shuffle ? (
+            <Shuffle size={32} color="#FF6D00" />
+          ) : (
+            <>
+              <Repeat 
+                size={32} 
+                color={repeatMode !== 'off' ? "#FF6D00" : colors.textSecondary} 
+              />
+              {repeatMode === 'track' && (
+                <Text style={styles.cycleBadge}>1</Text>
+              )}
+            </>
+          )}
         </TouchableOpacity>
       </View>
 
       {/* Bottom Actions */}
       <View style={s.bottomActions}>
-        <TouchableOpacity onPress={() => DownloadService.downloadTrack(currentTrack)}><Download size={20} color={colors.textSecondary} /></TouchableOpacity>
-        <TouchableOpacity onPress={shareTrack}><Share2 size={20} color={colors.textSecondary} /></TouchableOpacity>
-        <TouchableOpacity onPress={() => setAutoKnotVisible(true)}>
+        <TouchableOpacity style={s.actionButton} onPress={shareTrack}>
+          <Share2 size={20} color={colors.textSecondary} />
+        </TouchableOpacity>
+        <TouchableOpacity style={s.actionButton} onPress={() => setAutoKnotVisible(true)}>
           <View style={s.autoKnotBtn}>
             <Wand2 size={18} color="#FF6D00" />
             <Text style={s.autoKnotLabel}>Auto</Text>
           </View>
         </TouchableOpacity>
-        <TouchableOpacity onPress={() => router.push('/queue')}><ListMusic size={20} color={colors.textSecondary} /></TouchableOpacity>
+        <TouchableOpacity style={s.actionButton} onPress={() => router.push('/queue')}>
+          <ListMusic size={20} color={colors.textSecondary} />
+        </TouchableOpacity>
       </View>
 
       {/* Auto-Knot Bottom Sheet */}
       <AutoKnotSheet
         visible={autoKnotVisible}
         onClose={() => setAutoKnotVisible(false)}
-        songUri={currentTrack.source === 'local' ? (currentTrack.local_uri || '') : (currentTrack.youtube_id || '')}
+        songUri={currentTrack.local_uri || (currentTrack.source === 'youtube' ? currentTrack.youtube_id : '') || ''}
         songTitle={currentTrack.title || 'Unknown'}
         durationMs={currentTrack.duration_ms || duration * 1000}
         youtubeId={currentTrack.source === 'youtube' ? currentTrack.youtube_id : undefined}
@@ -495,7 +628,8 @@ const s = StyleSheet.create({
   skipBtn: { padding: 12 },
   playBtn: { marginHorizontal: 8 },
   playGradient: { width: 64, height: 64, borderRadius: 32, justifyContent: 'center', alignItems: 'center' },
-  bottomActions: { flexDirection: 'row', justifyContent: 'space-around', paddingHorizontal: spacing.hero, alignItems: 'center', paddingBottom: spacing.md },
+  bottomActions: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: spacing.hero, alignItems: 'center', paddingBottom: spacing.md },
+  actionButton: { minWidth: 44, alignItems: 'center', justifyContent: 'center' },
   autoKnotBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: 'rgba(255,109,0,0.1)', paddingHorizontal: 14, paddingVertical: 7, borderRadius: 18, borderWidth: 1.5, borderColor: 'rgba(255,109,0,0.3)' },
   autoKnotLabel: { fontFamily: typography.fontFamily.bold, fontSize: 12, color: '#FF6D00' },
 
@@ -583,4 +717,36 @@ const s = StyleSheet.create({
     fontSize: 10,
     color: '#FFF'
   }
+});
+
+const styles = StyleSheet.create({
+  cycleBtn: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'transparent',
+    borderWidth: 1.5,
+    borderColor: 'transparent',
+  },
+  cycleBtnActive: {
+    transform: [{ scale: 1.12 }],
+    backgroundColor: 'rgba(255, 109, 0, 0.25)',
+    borderColor: '#FF6D00',
+    borderWidth: 2,
+  },
+  cycleBadge: {
+    position: 'absolute',
+    color: '#FF6D00',
+    fontSize: 9,
+    fontWeight: 'bold',
+    bottom: 10,
+    right: 10,
+    backgroundColor: colors.background,
+    borderRadius: 5,
+    paddingHorizontal: 2.5,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 109, 0, 0.3)',
+  },
 });

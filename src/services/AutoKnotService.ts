@@ -195,85 +195,51 @@ async function analyzeStreaming(
 
   updateProgress('Initializing distributed engine...', 5);
 
-  return new Promise((resolve, reject) => {
-    let url = `${baseUrl}/api/knots/auto-knot-stream?youtube_id=${youtubeId}`;
-    if (streamUrl) {
-      url += `&stream_url=${encodeURIComponent(streamUrl)}`;
-    }
+  try {
+    // Use non-streaming endpoint since React Native doesn't support ReadableStream
+    updateProgress('Sending to distributed engines...', 10);
     
-    const allJunctions: { start_ms: number; end_ms: number }[] = [];
-    let originalDurationMs = 0;
-    let chunksFinished = 0;
-    let totalChunks = 3; // Default
+    const response = await fetch(`${baseUrl}/api/knots/auto-knot`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        youtube_id: youtubeId,
+        stream_url: streamUrl,
+        sensitivity: 'balanced',
+      }),
+    });
 
-    // Use EventSource for SSE
-    // Note: React Native doesn't have native EventSource, but we can use fetch with a stream reader 
-    // or a polyfill. For simplicity, we'll use a fetch-based reader if possible, 
-    // or just fall back to the non-streaming if it's too complex for this environment.
-    // However, the user specifically asked for "soon as chunks arrive".
+    if (!response.ok) {
+      const err = await response.json();
+      throw new Error(err.error || 'Distributed engine failed');
+    }
 
-    const processStream = async () => {
-      try {
-        const response = await fetch(url);
-        const reader = response.body?.getReader();
-        if (!reader) throw new Error('No reader available');
+    updateProgress('Processing across 6 engines...', 50);
+    const data = await response.json();
 
-        const decoder = new TextDecoder();
-        let buffer = '';
+    updateProgress('Merging results...', 90);
+    
+    const knots: Knot[] = (data.junctions || []).map((j: any) => ({
+      startTime: j.start_ms / 1000,
+      endTime: j.end_ms / 1000,
+      active: true,
+    }));
+    
+    store.setPendingKnots(knots);
+    updateProgress('Analysis complete!', 100);
+    store.setKnottingStatus('done');
 
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n\n');
-          buffer = lines.pop() || '';
-
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              const data = JSON.parse(line.substring(6));
-              
-              if (data.type === 'meta') {
-                originalDurationMs = data.duration * 1000;
-                totalChunks = data.numNodes;
-                updateProgress(`Song duration: ${Math.round(data.duration)}s. Node count: ${totalChunks}`, 10);
-              } else if (data.type === 'chunk') {
-                chunksFinished++;
-                allJunctions.push(...data.junctions);
-                
-                const percent = 10 + (chunksFinished / totalChunks) * 85;
-                updateProgress(`Analyzed section ${chunksFinished}/${totalChunks} (${data.junctions.length} knots found)`, percent);
-                
-                // Update the store immediately so UI updates
-                const knots: Knot[] = allJunctions.map(j => ({
-                  startTime: j.start_ms / 1000,
-                  endTime: j.end_ms / 1000,
-                  active: true,
-                }));
-                store.setPendingKnots(knots);
-              } else if (data.type === 'done') {
-                updateProgress('Analysis complete!', 100);
-                store.setKnottingStatus('done');
-                
-                resolve({
-                  junctions: allJunctions.sort((a, b) => a.start_ms - b.start_ms),
-                  knotted_duration_ms: allJunctions.reduce((s, j) => s + (j.end_ms - j.start_ms), 0),
-                  original_duration_ms: originalDurationMs,
-                  tier: 'fast',
-                  analysis_time_ms: Date.now() - startTime,
-                });
-                return;
-              }
-            }
-          }
-        }
-      } catch (e) {
-        reject(e);
-      }
+    return {
+      junctions: data.junctions || [],
+      knotted_duration_ms: data.knotted_duration_ms || 0,
+      original_duration_ms: data.original_duration_ms || 0,
+      tier: 'fast',
+      analysis_time_ms: Date.now() - startTime,
     };
-
-    processStream();
-  });
+  } catch (error) {
+    store.setKnottingStatus('error');
+    throw error;
+  }
 }
 
 async function analyzeFast(
@@ -286,9 +252,11 @@ async function analyzeFast(
   const startTime = Date.now();
   const store = usePlayerStore.getState();
   
-  if (youtubeId) {
-    // Pass the local songUri as the streamUrl to bypass data center blocks
-    return analyzeStreaming(youtubeId, onProgress, songUri);
+  const isOnlineStream = !!songUri && (songUri.startsWith('http://') || songUri.startsWith('https://'));
+  
+  if (youtubeId || isOnlineStream) {
+    // Pass the online streamUrl or local songUri as streamUrl to bypass local upload/data center blocks
+    return analyzeStreaming(youtubeId || 'stream_' + Date.now(), onProgress, songUri);
   }
 
   const updateProgress = (phase: string, percent: number) => {
@@ -380,13 +348,14 @@ async function analyzePro(
   };
 
   const isYoutube = !!youtubeId;
-  updateProgress(isYoutube ? 'Requesting AI analysis...' : 'Uploading to AI engine...', 5);
+  const isOnlineStream = !!songUri && (songUri.startsWith('http://') || songUri.startsWith('https://'));
+  updateProgress((isYoutube || isOnlineStream) ? 'Requesting AI analysis...' : 'Uploading to AI engine...', 5);
   
   const baseUrl = getBaseUrl();
   const formData = new FormData();
   
-  if (isYoutube) {
-    formData.append('youtube_id', youtubeId);
+  if (isYoutube || isOnlineStream) {
+    formData.append('youtube_id', youtubeId || 'stream_' + Date.now());
     if (songUri) {
       formData.append('stream_url', songUri);
     }

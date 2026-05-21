@@ -15,6 +15,7 @@ import { KnotService } from '@/src/services/KnotService';
 import { LocalMusicService, LocalTrack } from '@/src/services/LocalMusicService';
 import { AudioService } from '@/src/services/AudioService';
 import { usePlayerStore, Track } from '@/src/store/playerStore';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const { width } = Dimensions.get('window');
 
@@ -64,6 +65,7 @@ export default function HomeScreen() {
 
       // 3. Match details to local files
       const matched: KnottedSong[] = [];
+      const matchedFilenames = new Set<string>();
       for (const item of details) {
         const uri = item.key;
         let match = allLocal.find(t => t.uri === uri);
@@ -72,12 +74,43 @@ export default function HomeScreen() {
           if (fn) match = allLocal.find(t => t.filename.toLowerCase() === fn);
         }
 
-        if (match) {
+        // Fallback: match by title & artist
+        if (!match) {
+          let itemTitle = item.knot.title || '';
+          let itemArtist = item.knot.artist || '';
+          if (!itemTitle) {
+            const lastSegment = uri.split('/').pop() || '';
+            itemTitle = lastSegment.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ');
+          }
+          match = allLocal.find(t => 
+            KnotService.isTitleMatch(t.title, itemTitle) && 
+            KnotService.isArtistMatch(t.artist, itemArtist)
+          );
+        }
+
+        if (match && !matchedFilenames.has(match.filename.toLowerCase())) {
+          matchedFilenames.add(match.filename.toLowerCase());
+          // Check if this is a downloaded track with saved metadata
+          let thumbnail = match.thumbnail || '';
+          try {
+            const downloadedTrackKey = `downloaded_track_${item.key}`;
+            const savedMetadata = await AsyncStorage.getItem(downloadedTrackKey);
+            if (savedMetadata) {
+              const metadata = JSON.parse(savedMetadata);
+              // Use the saved thumbnail URL instead of content:// URI
+              if (metadata.thumbnail && metadata.thumbnail.startsWith('http')) {
+                thumbnail = metadata.thumbnail;
+              }
+            }
+          } catch (e) {
+            // Ignore errors, use default thumbnail
+          }
+
           matched.push({
-            id: match.id,
+            id: `${match.id}_${item.createdAt}`, // Make ID unique by combining with timestamp
             title: match.title,
             artist: match.artist,
-            thumbnail: match.thumbnail || '',
+            thumbnail: thumbnail,
             knotName: `${item.knot.junctions?.length || 0} Knot${(item.knot.junctions?.length || 0) !== 1 ? 's' : ''}`,
             duration: formatDuration(match.duration_ms),
             uri: match.uri,

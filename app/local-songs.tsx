@@ -25,27 +25,31 @@ export default function LocalSongsScreen() {
   const [tracks, setTracks] = useState<LocalTrack[]>([]);
   const [loading, setLoading] = useState(true);
   const [permissionDenied, setPermissionDenied] = useState(false);
+  const [isPermissionGranted, setIsPermissionGranted] = useState(true);
   const [search, setSearch] = useState('');
   const [cursor, setCursor] = useState<string | undefined>();
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
 
   useEffect(() => {
-    loadInitial();
+    loadInitial(false);
   }, []);
 
-  const loadInitial = async () => {
+  const loadInitial = async (isRetry: boolean = false) => {
     setLoading(true);
-    const granted = await LocalMusicService.requestPermission();
-    if (!granted) {
-      setPermissionDenied(true);
-      setLoading(false);
-      return;
+    let granted = await LocalMusicService.hasPermission();
+    if (!granted && isRetry) {
+      granted = await LocalMusicService.requestPermission();
     }
+    setIsPermissionGranted(granted);
+
     const result = await LocalMusicService.getDeviceSongs(80);
     setTracks(result.tracks);
     setCursor(result.endCursor);
     setHasMore(result.hasNextPage);
+    
+    // Only show full block if permission is denied AND no tracks (like downloaded tracks) are found
+    setPermissionDenied(!granted && result.tracks.length === 0);
     setLoading(false);
   };
 
@@ -126,7 +130,7 @@ export default function LocalSongsScreen() {
           <Text style={s.emptySubtitle}>
             Knot needs access to your media library to browse local songs.
           </Text>
-          <TouchableOpacity style={s.retryBtn} onPress={loadInitial}>
+          <TouchableOpacity style={s.retryBtn} onPress={() => loadInitial(true)}>
             <Text style={s.retryText}>Grant Permission</Text>
           </TouchableOpacity>
         </View>
@@ -159,7 +163,7 @@ export default function LocalSongsScreen() {
         </View>
       </View>
 
-      {/* Count Badge */}
+      {/* Count Badge & Warnings */}
       {!loading && (
         <View style={s.countRow}>
           <LinearGradient
@@ -168,8 +172,13 @@ export default function LocalSongsScreen() {
             end={{ x: 1, y: 0 }}
             style={s.countBadge}
           >
-            <Text style={s.countText}>{tracks.length} songs found</Text>
+            <Text style={s.countText}>{tracks.length} {tracks.length === 1 ? 'song' : 'songs'} found</Text>
           </LinearGradient>
+          {!isPermissionGranted && (
+            <Text style={s.permissionWarningText}>
+              Showing downloaded tracks only (permission denied)
+            </Text>
+          )}
         </View>
       )}
 
@@ -237,6 +246,12 @@ const s = StyleSheet.create({
   countText: {
     fontFamily: typography.fontFamily.semibold, fontSize: typography.size.xs,
     color: colors.onPrimary,
+  },
+  permissionWarningText: {
+    fontFamily: typography.fontFamily.medium,
+    fontSize: typography.size.xs,
+    color: colors.warning,
+    marginTop: 8,
   },
   list: { paddingHorizontal: spacing.xxl, paddingBottom: 120 },
   trackRow: {

@@ -13,6 +13,7 @@ import { KnotService } from '@/src/services/KnotService';
 import { LocalMusicService } from '@/src/services/LocalMusicService';
 import { AudioService } from '@/src/services/AudioService';
 import { usePlayerStore, Track } from '@/src/store/playerStore';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 interface KnottedSong {
   id: string;
@@ -54,7 +55,7 @@ export default function KnottedListScreen() {
       const matchedFilenames = new Set<string>();
       const localMatched: KnottedSong[] = [];
 
-      // Process local keys
+      // Process local keys (file:// or content:// URIs)
       const localFileUris = localKeys.filter(k => k.startsWith('file://') || k.startsWith('content://'));
       for (const uri of localFileUris) {
         let match = allLocal.find(t => t.uri === uri);
@@ -82,6 +83,44 @@ export default function KnottedListScreen() {
             createdAt: (knotData as any)?.createdAt || 0,
             knotCount: knotData?.junctions.length || 0,
           });
+        }
+      }
+
+      // Process online keys (YouTube IDs, pagalworld URLs, jiosaavn tokens, etc.)
+      const onlineKeys = localKeys.filter(k => !k.startsWith('file://') && !k.startsWith('content://'));
+      for (const key of onlineKeys) {
+        try {
+          // Check if this online song was downloaded
+          const downloadedData = await AsyncStorage.getItem(`downloaded_track_${key}`);
+          if (downloadedData) {
+            const downloaded = JSON.parse(downloadedData);
+            const downloadedFilename = (downloaded.filename || '').toLowerCase();
+            if (downloadedFilename && !matchedFilenames.has(downloadedFilename)) {
+              // Find the matching local device song
+              const localMatch = allLocal.find(t => t.filename.toLowerCase() === downloadedFilename) 
+                              || (downloaded.local_uri ? allLocal.find(t => t.uri === downloaded.local_uri) : null);
+              if (localMatch) {
+                const knotData = await KnotService.getSavedKnot(key);
+                matchedFilenames.add(localMatch.filename.toLowerCase());
+                localMatched.push({
+                  id: localMatch.id,
+                  title: localMatch.title,
+                  artist: localMatch.artist,
+                  thumbnail: localMatch.thumbnail || '',
+                  knotName: `${knotData?.junctions.length || 0} Knot${(knotData?.junctions.length || 0) !== 1 ? 's' : ''}`,
+                  duration: formatDuration(localMatch.duration_ms),
+                  uri: localMatch.uri,
+                  source: 'local',
+                  filename: localMatch.filename,
+                  duration_ms: localMatch.duration_ms,
+                  createdAt: (knotData as any)?.createdAt || 0,
+                  knotCount: knotData?.junctions.length || 0,
+                });
+              }
+            }
+          }
+        } catch (e) {
+          // Skip individual key errors
         }
       }
 

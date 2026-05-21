@@ -254,6 +254,11 @@ export function AutoKnotSheet({
   const [error, setError] = useState<string | null>(null);
   const [cloudAvailable, setCloudAvailable] = useState(true);
 
+  const canUpload = !!songUri && (songUri.startsWith('file://') || songUri.startsWith('content://'));
+  const isOnlineStream = !!songUri && (songUri.startsWith('http://') || songUri.startsWith('https://'));
+  const isYoutube = !!youtubeId;
+  const canUseCloudDSP = isYoutube || canUpload || isOnlineStream;
+
   // Check cloud availability when sheet opens
   useEffect(() => {
     if (visible) {
@@ -261,8 +266,14 @@ export function AutoKnotSheet({
       setError(null);
       setProgress({ phase: '', percent: 0 });
       setIsAnalyzing(false);
+
+      if (selectedTier === 'ultra' && !isYoutube) {
+        setSelectedTier('instant');
+      } else if ((selectedTier === 'fast' || selectedTier === 'pro') && !canUseCloudDSP) {
+        setSelectedTier('instant');
+      }
     }
-  }, [visible]);
+  }, [visible, songUri, youtubeId]);
 
   const handleAnalyze = async () => {
     setError(null);
@@ -350,13 +361,13 @@ export function AutoKnotSheet({
                 tier="fast"
                 selected={selectedTier === 'fast'}
                 onSelect={() => setSelectedTier('fast')}
-                disabled={!cloudAvailable}
+                disabled={!cloudAvailable || !canUseCloudDSP}
               />
               <TierCard
                 tier="pro"
                 selected={selectedTier === 'pro'}
                 onSelect={() => setSelectedTier('pro')}
-                disabled={!cloudAvailable}
+                disabled={!cloudAvailable || !canUseCloudDSP}
               />
 
               {!cloudAvailable && (

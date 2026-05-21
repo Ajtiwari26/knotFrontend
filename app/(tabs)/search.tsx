@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Activi
 import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { Search as SearchIcon, Mic, Wifi, WifiOff, X } from 'lucide-react-native';
+import { Search as SearchIcon, Mic, Wifi, WifiOff, X, Clock } from 'lucide-react-native';
 import { colors } from '@/src/theme/colors';
 import { typography } from '@/src/theme/typography';
 import { spacing, borderRadius } from '@/src/theme/spacing';
@@ -17,6 +17,10 @@ import { AudioService } from '@/src/services/AudioService';
 import { usePlayerStore, Track } from '@/src/store/playerStore';
 import { resolveBaseUrl } from '@/src/config/api';
 import DownloadService from '@/src/services/DownloadService';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+const SEARCH_HISTORY_KEY = 'online_search_history';
+const MAX_SEARCH_HISTORY = 2;
 
 const { width } = Dimensions.get('window');
 const GENRES = ['All', 'Pop', 'Rock', 'Hip-Hop', 'Electronic', 'Jazz', 'Classical', 'R&B'];
@@ -33,6 +37,18 @@ const TRACKS = [
   { id: 'tk2', title: 'Bad Guy', artist: 'Billie Eilish', thumbnail: 'https://i.ytimg.com/vi/DyDfgMOUjCI/hqdefault.jpg', duration: '3:14', knotName: 'Bass Drop' },
 ];
 
+const SearchSkeletonItem = () => {
+  return (
+    <View style={s.skeletonContainer}>
+      <View style={s.skeletonArt} />
+      <View style={s.skeletonInfo}>
+        <View style={s.skeletonTitle} />
+        <View style={s.skeletonSubtitle} />
+      </View>
+    </View>
+  );
+};
+
 export default function SearchScreen() {
   const router = useRouter();
   
@@ -48,7 +64,16 @@ export default function SearchScreen() {
   const [onlineResults, setOnlineResults] = useState<any[]>([]);
   const [pagalworldResults, setPagalworldResults] = useState<any[]>([]);
   const [pagalfreeResults, setPagalfreeResults] = useState<any[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [jiosaavnResults, setJiosaavnResults] = useState<any[]>([]);
+  
+  const [loadingYoutube, setLoadingYoutube] = useState(false);
+  const [loadingPagalworld, setLoadingPagalworld] = useState(false);
+  const [loadingPagalfree, setLoadingPagalfree] = useState(false);
+  const [loadingJiosaavn, setLoadingJiosaavn] = useState(false);
+  const loading = loadingYoutube || loadingPagalworld || loadingPagalfree || loadingJiosaavn;
+
+  // Search History State
+  const [searchHistory, setSearchHistory] = useState<string[]>([]);
 
   // Player Actions
   const setCurrentTrack = usePlayerStore(state => state.setCurrentTrack);
@@ -57,22 +82,80 @@ export default function SearchScreen() {
 
   useEffect(() => {
     loadKnottedLocal();
+    loadSearchHistory();
   }, []);
 
+  const loadSearchHistory = async () => {
+    try {
+      const data = await AsyncStorage.getItem(SEARCH_HISTORY_KEY);
+      if (data) setSearchHistory(JSON.parse(data));
+    } catch (e) {
+      console.warn('[Search] Failed to load search history:', e);
+    }
+  };
+
+  const saveSearchQuery = async (q: string) => {
+    try {
+      const trimmed = q.trim();
+      if (!trimmed) return;
+      const updated = [trimmed, ...searchHistory.filter(h => h.toLowerCase() !== trimmed.toLowerCase())].slice(0, MAX_SEARCH_HISTORY);
+      setSearchHistory(updated);
+      await AsyncStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(updated));
+    } catch (e) {
+      console.warn('[Search] Failed to save search history:', e);
+    }
+  };
+
+  const removeSearchHistoryItem = async (index: number) => {
+    try {
+      const updated = searchHistory.filter((_, i) => i !== index);
+      setSearchHistory(updated);
+      await AsyncStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(updated));
+    } catch (e) {
+      console.warn('[Search] Failed to remove search history item:', e);
+    }
+  };
+
+  // Instant local search on every keystroke
   useEffect(() => {
     const q = query.trim();
     latestQuery.current = q;
-    
+
     if (q.length > 0) {
-      const delaySearch = setTimeout(() => {
-        handleSearch();
-      }, 400);
-      return () => clearTimeout(delaySearch);
+      // Local search is instant (in-memory cache)
+      LocalMusicService.searchDeviceSongs(q).then(results => {
+        if (latestQuery.current === q) setLocalResults(results);
+      });
     } else {
       setLocalResults([]);
       setOnlineResults([]);
       setPagalworldResults([]);
       setPagalfreeResults([]);
+      setJiosaavnResults([]);
+      setLoadingYoutube(false);
+      setLoadingPagalworld(false);
+      setLoadingPagalfree(false);
+      setLoadingJiosaavn(false);
+    }
+  }, [query]);
+
+  // Debounced online search
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length > 0 && searchMode === 'online') {
+      const delaySearch = setTimeout(() => {
+        handleOnlineSearch(q);
+      }, 300);
+      return () => clearTimeout(delaySearch);
+    } else {
+      setOnlineResults([]);
+      setPagalworldResults([]);
+      setPagalfreeResults([]);
+      setJiosaavnResults([]);
+      setLoadingYoutube(false);
+      setLoadingPagalworld(false);
+      setLoadingPagalfree(false);
+      setLoadingJiosaavn(false);
     }
   }, [query, searchMode]);
 
@@ -110,85 +193,111 @@ export default function SearchScreen() {
     }
   };
 
-  const handleSearch = async () => {
-    const q = query.trim();
-    if (!q) {
-      setLocalResults([]);
+  const handleOnlineSearch = async (q: string) => {
+    const trimmed = q.trim();
+    if (!trimmed) {
       setOnlineResults([]);
       setPagalworldResults([]);
       setPagalfreeResults([]);
+      setJiosaavnResults([]);
+      setLoadingYoutube(false);
+      setLoadingPagalworld(false);
+      setLoadingPagalfree(false);
+      setLoadingJiosaavn(false);
       return;
     }
 
     try {
-      console.log(`[Search] Searching for: "${q}" (Mode: ${searchMode})`);
+      console.log(`[Search] Searching online for: "${trimmed}"`);
       
-      // 1. Search Local (Always instant)
-      const matchedLocal = await LocalMusicService.searchDeviceSongs(q);
+      // Save to search history
+      saveSearchQuery(trimmed);
       
-      // Safety check: if user cleared search or typed something else, abort
-      if (latestQuery.current !== q) return;
+      // Reset old results and set all loading states
+      setOnlineResults([]);
+      setPagalworldResults([]);
+      setPagalfreeResults([]);
+      setJiosaavnResults([]);
+
+      setLoadingYoutube(true);
+      setLoadingPagalworld(true);
+      setLoadingPagalfree(true);
+      setLoadingJiosaavn(true);
       
-      setLocalResults(matchedLocal);
-      console.log(`[Search] Found ${matchedLocal.length} local results`);
-
-      // 2. Search Online (if mode is online)
-      if (searchMode === 'online') {
-        setLoading(true);
-        
-        const fetchYoutube = async () => {
-          try {
-            const baseUrl = await resolveBaseUrl();
-            const res = await fetch(`${baseUrl}/api/songs/search?q=${encodeURIComponent(q)}`);
-            if (latestQuery.current !== q) return;
-            if (res.ok) {
-              const data = await res.json();
-              setOnlineResults(data ? data.slice(0, 8) : []);
-            }
-          } catch (e) {
-            console.warn('[Search] YouTube search failed', e);
+      const fetchYoutube = async () => {
+        try {
+          const baseUrl = await resolveBaseUrl();
+          const res = await fetch(`${baseUrl}/api/songs/search?q=${encodeURIComponent(trimmed)}`);
+          if (latestQuery.current !== trimmed) return;
+          if (res.ok) {
+            const data = await res.json();
+            setOnlineResults(data ? data.slice(0, 8) : []);
           }
-        };
-
-        const fetchPagalworld = async () => {
-          try {
-            const PagalworldService = require('@/src/services/PagalworldService').default;
-            const results = await PagalworldService.search(q);
-            if (latestQuery.current !== q) return;
-            setPagalworldResults(results || []);
-          } catch (e) {
-            console.warn('[Search] Pagalworld search failed', e);
+        } catch (e) {
+          console.warn('[Search] YouTube search failed', e);
+        } finally {
+          if (latestQuery.current === trimmed) {
+            setLoadingYoutube(false);
           }
-        };
+        }
+      };
 
-        const fetchPagalfree = async () => {
-          try {
-            const PagalfreeService = require('@/src/services/PagalfreeService').default;
-            const results = await PagalfreeService.search(q);
-            if (latestQuery.current !== q) return;
-            setPagalfreeResults(results || []);
-          } catch (e) {
-            console.warn('[Search] Pagalfree search failed', e);
+      const fetchPagalworld = async () => {
+        try {
+          const PagalworldService = require('@/src/services/PagalworldService').default;
+          const results = await PagalworldService.search(trimmed);
+          if (latestQuery.current !== trimmed) return;
+          setPagalworldResults(results || []);
+        } catch (e) {
+          console.warn('[Search] Pagalworld search failed', e);
+        } finally {
+          if (latestQuery.current === trimmed) {
+            setLoadingPagalworld(false);
           }
-        };
+        }
+      };
 
-        // Fire all in parallel
-        await Promise.all([
-          fetchYoutube(),
-          fetchPagalworld(),
-          fetchPagalfree()
-        ]);
-      } else {
-        setOnlineResults([]);
-        setPagalworldResults([]);
-        setPagalfreeResults([]);
-      }
+      const fetchPagalfree = async () => {
+        try {
+          const PagalfreeService = require('@/src/services/PagalfreeService').default;
+          const results = await PagalfreeService.search(trimmed);
+          if (latestQuery.current !== trimmed) return;
+          setPagalfreeResults(results || []);
+        } catch (e) {
+          console.warn('[Search] Pagalfree search failed', e);
+        } finally {
+          if (latestQuery.current === trimmed) {
+            setLoadingPagalfree(false);
+          }
+        }
+      };
+
+      const fetchJiosaavn = async () => {
+        try {
+          const JiosaavnService = require('@/src/services/JiosaavnService').default;
+          const results = await JiosaavnService.search(trimmed);
+          if (latestQuery.current !== trimmed) return;
+          setJiosaavnResults(results || []);
+        } catch (e) {
+          console.warn('[Search] JioSaavn search failed', e);
+        } finally {
+          if (latestQuery.current === trimmed) {
+            setLoadingJiosaavn(false);
+          }
+        }
+      };
+
+      // Fire all in parallel asynchronously
+      fetchYoutube();
+      fetchPagalworld();
+      fetchPagalfree();
+      fetchJiosaavn();
     } catch (e) {
-      console.error('[Search] Search error:', e);
-    } finally {
-      if (latestQuery.current === q) {
-        setLoading(false);
-      }
+      console.error('[Search] Online search error:', e);
+      setLoadingYoutube(false);
+      setLoadingPagalworld(false);
+      setLoadingPagalfree(false);
+      setLoadingJiosaavn(false);
     }
   };
 
@@ -254,6 +363,28 @@ export default function SearchScreen() {
       router.push('/player');
     } catch (e) {
       console.error('Pagalfree play error:', e);
+      alert(`Playback Error: ${(e as Error).message}`);
+    }
+  };
+
+  const handlePlayJiosaavn = async (track: any, index: number) => {
+    try {
+      const queueTracks: Track[] = jiosaavnResults.map(r => ({
+        jiosaavn_token: r.token,
+        source: 'jiosaavn' as const,
+        title: r.title,
+        artist: r.artist || 'JioSaavn',
+        thumbnail: r.imageUrl || '',
+        duration_ms: 0, // Metadata will be fetched on play
+      }));
+      
+      setQueue(queueTracks, index);
+      setIsPlaying(true);
+      
+      await AudioService.playQueueTrack(queueTracks[index]);
+      router.push('/player');
+    } catch (e) {
+      console.error('JioSaavn play error:', e);
       alert(`Playback Error: ${(e as Error).message}`);
     }
   };
@@ -348,6 +479,33 @@ export default function SearchScreen() {
               {GENRES.map(g => <Chip key={g} label={g} active={activeGenre === g} onPress={() => setActiveGenre(g)} />)}
             </ScrollView>
 
+            {searchHistory.length > 0 && (
+              <>
+                <View style={s.recentHeader}>
+                  <Clock size={14} color={colors.textSecondary} />
+                  <Text style={s.recentTitle}>Recent Searches</Text>
+                </View>
+                <View style={s.recentRow}>
+                  {searchHistory.map((q, i) => (
+                    <TouchableOpacity 
+                      key={`hist-${i}`} 
+                      style={s.recentChip}
+                      onPress={() => { setQuery(q); }}
+                    >
+                      <Text style={s.recentChipText} numberOfLines={1}>{q}</Text>
+                      <TouchableOpacity 
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        onPress={(e) => { e.stopPropagation(); removeSearchHistoryItem(i); }}
+                      >
+                        <X size={14} color={colors.textSecondary} />
+                      </TouchableOpacity>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <View style={s.gap} />
+              </>
+            )}
+
             {knotted.length > 0 && (
               <>
                 <View style={s.gap} />
@@ -413,82 +571,147 @@ export default function SearchScreen() {
 
             {searchMode === 'online' && (
               <>
-                {onlineResults.length > 0 && (
+                {/* JioSaavn Results (Fastest response) */}
+                {(loadingJiosaavn || jiosaavnResults.length > 0) && (
                   <View style={s.section}>
-                    <Text style={s.sectionTitle}>YouTube Results</Text>
-                    {onlineResults.map((r, i) => (
-                      <TrackItem 
-                        key={r.youtube_id} 
-                        title={r.title} 
-                        artist={r.artist} 
-                        thumbnail={r.thumbnail} 
-                        duration={Math.floor(r.duration_ms / 60000) + ':' + String(Math.floor((r.duration_ms % 60000) / 1000)).padStart(2, '0')} 
-                        showMore 
-                        onPress={() => handlePlayOnline(r, i)} 
-                      />
-                    ))}
+                    <View style={s.sectionHeaderRow}>
+                      <Text style={s.sectionTitle}>JioSaavn Results</Text>
+                      {loadingJiosaavn && <ActivityIndicator size="small" color={colors.primary} style={{ marginLeft: 8 }} />}
+                    </View>
+                    {loadingJiosaavn && jiosaavnResults.length === 0 ? (
+                      <>
+                        <SearchSkeletonItem />
+                        <SearchSkeletonItem />
+                      </>
+                    ) : (
+                      jiosaavnResults.map((r, i) => (
+                        <TrackItem 
+                          key={`js-${i}`} 
+                          title={r.title} 
+                          artist={r.artist || 'JioSaavn'} 
+                          thumbnail={r.imageUrl} 
+                          duration="--:--" 
+                          showMore 
+                          onPress={() => handlePlayJiosaavn(r, i)} 
+                          onDownload={() => DownloadService.downloadTrack({
+                            jiosaavn_token: r.token,
+                            source: 'jiosaavn',
+                            title: r.title,
+                            artist: r.artist || 'JioSaavn',
+                            thumbnail: r.imageUrl || '',
+                            duration_ms: 0
+                          })}
+                        />
+                      ))
+                    )}
                   </View>
                 )}
 
-                {pagalworldResults.length > 0 && (
+                {/* YouTube Results */}
+                {(loadingYoutube || onlineResults.length > 0) && (
                   <View style={s.section}>
-                    <Text style={s.sectionTitle}>Pagalworld Results</Text>
-                    {pagalworldResults.map((r, i) => (
-                      <TrackItem 
-                        key={`pw-${i}`} 
-                        title={r.title} 
-                        artist={r.artist || 'Pagalworld'} 
-                        thumbnail={r.imageUrl} 
-                        duration="--:--" 
-                        showMore 
-                        onPress={() => handlePlayPagalworld(r, i)} 
-                        onDownload={() => DownloadService.downloadTrack({
-                          pagalworld_url: r.url,
-                          source: 'pagalworld',
-                          title: r.title,
-                          artist: r.artist || 'Pagalworld',
-                          thumbnail: r.imageUrl || '',
-                          duration_ms: 0
-                        })}
-                      />
-                    ))}
+                    <View style={s.sectionHeaderRow}>
+                      <Text style={s.sectionTitle}>YouTube Results</Text>
+                      {loadingYoutube && <ActivityIndicator size="small" color={colors.primary} style={{ marginLeft: 8 }} />}
+                    </View>
+                    {loadingYoutube && onlineResults.length === 0 ? (
+                      <>
+                        <SearchSkeletonItem />
+                        <SearchSkeletonItem />
+                      </>
+                    ) : (
+                      onlineResults.map((r, i) => (
+                        <TrackItem 
+                          key={r.youtube_id} 
+                          title={r.title} 
+                          artist={r.artist} 
+                          thumbnail={r.thumbnail} 
+                          duration={Math.floor(r.duration_ms / 60000) + ':' + String(Math.floor((r.duration_ms % 60000) / 1000)).padStart(2, '0')} 
+                          showMore 
+                          onPress={() => handlePlayOnline(r, i)} 
+                        />
+                      ))
+                    )}
                   </View>
                 )}
 
-                {pagalfreeResults.length > 0 && (
+                {/* Pagalworld Results */}
+                {(loadingPagalworld || pagalworldResults.length > 0) && (
                   <View style={s.section}>
-                    <Text style={s.sectionTitle}>Pagalfree Results</Text>
-                    {pagalfreeResults.map((r, i) => (
-                      <TrackItem 
-                        key={`pf-${i}`} 
-                        title={r.title} 
-                        artist={r.artist || 'Pagalfree'} 
-                        thumbnail={r.imageUrl} 
-                        duration="--:--" 
-                        showMore 
-                        onPress={() => handlePlayPagalfree(r, i)} 
-                        onDownload={() => DownloadService.downloadTrack({
-                          pagalfree_url: r.url,
-                          source: 'pagalfree',
-                          title: r.title,
-                          artist: r.artist || 'Pagalfree',
-                          thumbnail: r.imageUrl || '',
-                          duration_ms: 0
-                        })}
-                      />
-                    ))}
+                    <View style={s.sectionHeaderRow}>
+                      <Text style={s.sectionTitle}>Pagalworld Results</Text>
+                      {loadingPagalworld && <ActivityIndicator size="small" color={colors.primary} style={{ marginLeft: 8 }} />}
+                    </View>
+                    {loadingPagalworld && pagalworldResults.length === 0 ? (
+                      <>
+                        <SearchSkeletonItem />
+                        <SearchSkeletonItem />
+                      </>
+                    ) : (
+                      pagalworldResults.map((r, i) => (
+                        <TrackItem 
+                          key={`pw-${i}`} 
+                          title={r.title} 
+                          artist={r.artist || 'Pagalworld'} 
+                          thumbnail={r.imageUrl} 
+                          duration="--:--" 
+                          showMore 
+                          onPress={() => handlePlayPagalworld(r, i)} 
+                          onDownload={() => DownloadService.downloadTrack({
+                            pagalworld_url: r.url,
+                            source: 'pagalworld',
+                            title: r.title,
+                            artist: r.artist || 'Pagalworld',
+                            thumbnail: r.imageUrl || '',
+                            duration_ms: 0
+                          })}
+                        />
+                      ))
+                    )}
                   </View>
                 )}
 
-                {loading && onlineResults.length === 0 && pagalworldResults.length === 0 && pagalfreeResults.length === 0 && (
-                  <ActivityIndicator size="small" color={colors.primary} style={{ marginTop: 20 }} />
+                {/* Pagalfree Results */}
+                {(loadingPagalfree || pagalfreeResults.length > 0) && (
+                  <View style={s.section}>
+                    <View style={s.sectionHeaderRow}>
+                      <Text style={s.sectionTitle}>Pagalfree Results</Text>
+                      {loadingPagalfree && <ActivityIndicator size="small" color={colors.primary} style={{ marginLeft: 8 }} />}
+                    </View>
+                    {loadingPagalfree && pagalfreeResults.length === 0 ? (
+                      <>
+                        <SearchSkeletonItem />
+                        <SearchSkeletonItem />
+                      </>
+                    ) : (
+                      pagalfreeResults.map((r, i) => (
+                        <TrackItem 
+                          key={`pf-${i}`} 
+                          title={r.title} 
+                          artist={r.artist || 'Pagalfree'} 
+                          thumbnail={r.imageUrl} 
+                          duration="--:--" 
+                          showMore 
+                          onPress={() => handlePlayPagalfree(r, i)} 
+                          onDownload={() => DownloadService.downloadTrack({
+                            pagalfree_url: r.url,
+                            source: 'pagalfree',
+                            title: r.title,
+                            artist: r.artist || 'Pagalfree',
+                            thumbnail: r.imageUrl || '',
+                            duration_ms: 0
+                          })}
+                        />
+                      ))
+                    )}
+                  </View>
                 )}
               </>
             )}
 
             {!loading && query.trim().length > 0 && localResults.length === 0 && 
               ((searchMode === 'offline') || 
-               (searchMode === 'online' && onlineResults.length === 0 && pagalworldResults.length === 0 && pagalfreeResults.length === 0)) && (
+               (searchMode === 'online' && onlineResults.length === 0 && pagalworldResults.length === 0 && pagalfreeResults.length === 0 && jiosaavnResults.length === 0)) && (
               <Text style={s.emptyText}>No results found for "{query}"</Text>
             )}
           </>
@@ -522,5 +745,47 @@ const s = StyleSheet.create({
 
   section: { marginBottom: spacing.xl },
   sectionTitle: { fontFamily: typography.fontFamily.bold, fontSize: typography.size.md, color: colors.text, marginBottom: spacing.md },
+  sectionHeaderRow: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.md },
   emptyText: { fontFamily: typography.fontFamily.body, fontSize: typography.size.sm, color: colors.textSecondary, textAlign: 'center', marginTop: spacing.xl },
+
+  // Skeletons
+  skeletonContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.surfaceContainerLow,
+    padding: 12,
+    borderRadius: borderRadius.lg,
+    marginBottom: 12,
+    opacity: 0.6,
+  },
+  skeletonArt: {
+    width: 56,
+    height: 56,
+    borderRadius: borderRadius.md,
+    backgroundColor: colors.surfaceContainer,
+  },
+  skeletonInfo: {
+    flex: 1,
+    marginLeft: 14,
+    gap: 8,
+  },
+  skeletonTitle: {
+    width: '65%',
+    height: 14,
+    borderRadius: borderRadius.sm,
+    backgroundColor: colors.surfaceContainerHigh,
+  },
+  skeletonSubtitle: {
+    width: '45%',
+    height: 10,
+    borderRadius: borderRadius.sm,
+    backgroundColor: colors.surfaceContainer,
+  },
+
+  // Recent Searches
+  recentHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: spacing.md },
+  recentTitle: { fontFamily: typography.fontFamily.semibold, fontSize: typography.size.xs, color: colors.textSecondary, textTransform: 'uppercase', letterSpacing: 1 },
+  recentRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  recentChip: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: colors.surfaceContainerLow, paddingHorizontal: 14, paddingVertical: 9, borderRadius: borderRadius.full, borderWidth: 1, borderColor: colors.surfaceContainerHigh },
+  recentChipText: { fontFamily: typography.fontFamily.semibold, fontSize: typography.size.sm, color: colors.text, maxWidth: 160 },
 });

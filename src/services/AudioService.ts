@@ -1,4 +1,4 @@
-import TrackPlayer, { AppKilledPlaybackBehavior, Capability, State } from 'react-native-track-player';
+import TrackPlayer, { AppKilledPlaybackBehavior, Capability, State, RepeatMode } from 'react-native-track-player';
 
 export class AudioService {
   private static isSetup = false;
@@ -15,8 +15,9 @@ export class AudioService {
       await TrackPlayer.setupPlayer();
       await TrackPlayer.updateOptions({
         android: {
-          appKilledPlaybackBehavior: AppKilledPlaybackBehavior.ContinuePlayback,
+          appKilledPlaybackBehavior: AppKilledPlaybackBehavior.StopPlaybackAndRemoveNotification,
         },
+        progressUpdateEventInterval: 0.5,
         capabilities: [
           Capability?.Play,
           Capability?.Pause,
@@ -84,10 +85,30 @@ export class AudioService {
   }
 
   static async togglePlayPause() {
-    const state = await TrackPlayer.getPlaybackState();
+    const state = await TrackPlayer.getPlaybackState() as any;
     if (state?.state === State.Playing) {
       await TrackPlayer.pause();
     } else {
+      try {
+        const activeTrack = await TrackPlayer.getActiveTrack();
+        if (!activeTrack) {
+          const store = require('@/src/store/playerStore').usePlayerStore.getState();
+          if (store.currentTrack) {
+            console.log('[AudioService] No active track found, playing store currentTrack:', store.currentTrack.title);
+            await this.playQueueTrack(store.currentTrack);
+            return;
+          }
+        } else if (activeTrack.url === 'https://placeholder.invalid') {
+          const store = require('@/src/store/playerStore').usePlayerStore.getState();
+          if (store.currentTrack) {
+            console.log('[AudioService] Resuming playback of hydrated placeholder track:', store.currentTrack.title);
+            await this.playQueueTrack(store.currentTrack);
+            return;
+          }
+        }
+      } catch (e) {
+        console.warn('[AudioService] Failed to check/resolve placeholder track:', e);
+      }
       await TrackPlayer.play();
     }
   }
@@ -115,6 +136,48 @@ export class AudioService {
   static async playQueueTrack(track: any) {
     if (!this.isSetup) await this.setupPlayer();
 
+    // Sync repeat mode with native player
+    try {
+      const store = require('@/src/store/playerStore').usePlayerStore.getState();
+      const nativeMode = store.repeatMode === 'track' ? RepeatMode.Track : RepeatMode.Off;
+      await TrackPlayer.setRepeatMode(nativeMode);
+      console.log('[AudioService] Synced native repeat mode:', nativeMode);
+    } catch (e) {
+      console.warn('[AudioService] Failed to sync repeat mode on play:', e);
+    }
+
+    let seekToPosition: number | null = null;
+    try {
+      const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+      const shouldRestoreFlag = await AsyncStorage.getItem('restore_saved_position_flag');
+      const activeTrack = await TrackPlayer.getActiveTrack();
+      const isPlaceholder = activeTrack && activeTrack.url === 'https://placeholder.invalid';
+      
+      if (shouldRestoreFlag === 'true' || isPlaceholder) {
+        const trackKey = track.youtube_id || track.pagalworld_url || track.pagalfree_url || track.jiosaavn_token || track.local_uri;
+        const savedSongKey = await AsyncStorage.getItem('last_played_song_key');
+        
+        if (trackKey && trackKey === savedSongKey) {
+          const savedPosStr = await AsyncStorage.getItem('last_played_position');
+          if (savedPosStr) {
+            seekToPosition = parseFloat(savedPosStr);
+            console.log('[AudioService] Found boot-time saved position to restore:', seekToPosition);
+          }
+        }
+        await AsyncStorage.removeItem('restore_saved_position_flag');
+      }
+    } catch (e) {
+      console.warn('[AudioService] Failed to check for saved position:', e);
+    }
+
+    // Load knots for this track (works in background too!)
+    try {
+      const { KnotService } = require('./KnotService');
+      await KnotService.loadKnotsForTrack(track);
+    } catch (e) {
+      console.warn('[AudioService] Failed to load knots for track:', e);
+    }
+
     if (track.source === 'local') {
       await this.playLocal(track.local_uri, track.title, track.artist, track.thumbnail, track.local_uri);
     } else if (track.source === 'pagalworld') {
@@ -131,8 +194,16 @@ export class AudioService {
           }
 
           if (metadata) {
+            // Update track metadata
             if (metadata.title) track.title = metadata.title;
             if (metadata.artist) track.artist = metadata.artist;
+            if (metadata.imageUrl) track.thumbnail = metadata.imageUrl;
+
+            // Update the player store with enriched track
+            const store = require('@/src/store/playerStore').usePlayerStore.getState();
+            store.setCurrentTrack({ ...track });
+
+
 
             streamUrl = PagalworldService.getStreamUrl(metadata);
           } else {
@@ -156,14 +227,28 @@ export class AudioService {
           let directUrl = track.pagalfree_direct_url;
           if (!directUrl && track.pagalfree_url) {
             const metadata = await PagalfreeService.getMetadata(track.pagalfree_url);
+            console.log('[AudioService] Pagalfree metadata received:', JSON.stringify(metadata, null, 2));
+            
             if (metadata && metadata.downloadLinks.length > 0) {
               // Prefer 320kbps, then 128kbps, then whatever is first
               const bestLink = metadata.downloadLinks.find((l: any) => l.quality === '320kbps') || 
                                metadata.downloadLinks.find((l: any) => l.quality === '128kbps') || 
                                metadata.downloadLinks[0];
               directUrl = bestLink.url;
+              
+              // Update track metadata
               if (metadata.title) track.title = metadata.title;
               if (metadata.artist) track.artist = metadata.artist;
+              if (metadata.imageUrl) {
+                track.thumbnail = metadata.imageUrl;
+                console.log('[AudioService] Updated thumbnail to:', metadata.imageUrl);
+              }
+              
+              // Update the player store with enriched track
+              const store = require('@/src/store/playerStore').usePlayerStore.getState();
+              store.setCurrentTrack({ ...track });
+
+
             }
           }
 
@@ -179,6 +264,57 @@ export class AudioService {
       }
 
       await this.playStream(streamUrl, track.title, track.artist, track.thumbnail, track.pagalfree_url || 'pagalfree-stream');
+    } else if (track.source === 'jiosaavn') {
+      let streamUrl = track.streamUrl;
+
+      if (!streamUrl) {
+        try {
+          const JiosaavnService = require('./JiosaavnService').default;
+          console.log(`[AudioService] Fetching metadata for JioSaavn song: ${track.title}...`);
+
+          let directUrl = track.jiosaavn_direct_url;
+          if (!directUrl && track.jiosaavn_token) {
+            const metadata = await JiosaavnService.getMetadata(track.jiosaavn_token);
+            console.log('[AudioService] JioSaavn metadata received:', JSON.stringify(metadata, null, 2));
+            
+            if (metadata && metadata.downloadLinks.length > 0) {
+              // Prefer 320kbps, then 160kbps, then whatever is first
+              const bestLink = metadata.downloadLinks.find((l: any) => l.quality === '320kbps') || 
+                               metadata.downloadLinks.find((l: any) => l.quality === '160kbps') || 
+                               metadata.downloadLinks[0];
+              directUrl = bestLink.url;
+              
+              // Update track metadata
+              if (metadata.title) track.title = metadata.title;
+              if (metadata.artist) track.artist = metadata.artist;
+              if (metadata.imageUrl) {
+                track.thumbnail = metadata.imageUrl;
+                console.log('[AudioService] Updated thumbnail to:', metadata.imageUrl);
+              }
+              if (metadata.duration_ms) {
+                track.duration_ms = metadata.duration_ms;
+              }
+              
+              // Update the player store with enriched track
+              const store = require('@/src/store/playerStore').usePlayerStore.getState();
+              store.setCurrentTrack({ ...track });
+
+
+            }
+          }
+
+          if (directUrl) {
+            streamUrl = JiosaavnService.getStreamUrl(directUrl);
+          } else {
+            throw new Error('Could not resolve JioSaavn download link');
+          }
+        } catch (e) {
+          console.error('[AudioService] JioSaavn resolution failed:', e);
+          throw e;
+        }
+      }
+
+      await this.playStream(streamUrl, track.title, track.artist, track.thumbnail, track.jiosaavn_token || 'jiosaavn-stream');
     } else {
       let streamUrl = track.streamUrl;
       const { getBaseUrl } = require('@/src/config/api');
@@ -207,7 +343,20 @@ export class AudioService {
         }
       }
       
+
+
       await this.playStream(streamUrl, track.title, track.artist, track.thumbnail, track.youtube_id);
+    }
+
+    if (seekToPosition !== null && seekToPosition > 0) {
+      setTimeout(async () => {
+        try {
+          console.log('[AudioService] Seeking to restored position:', seekToPosition);
+          await TrackPlayer.seekTo(seekToPosition);
+        } catch (seekErr) {
+          console.warn('[AudioService] Failed to seek to restored position:', seekErr);
+        }
+      }, 500);
     }
   }
 }

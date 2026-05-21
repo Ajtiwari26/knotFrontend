@@ -44,6 +44,15 @@ export default function RootLayout() {
     // Initialize Local Music Listeners
     LocalMusicService.init();
 
+    // Request media permissions upfront so we don't ask per-download or per-screen
+    LocalMusicService.requestPermission().then((granted) => {
+      if (granted) {
+        console.log('[RootLayout] Media permission granted at startup. Pre-warming cache...');
+        // Trigger a background scan to warm the cache for fast search
+        LocalMusicService.getDeviceSongs(100);
+      }
+    });
+
     // Initialize TrackPlayer
     AudioService.setupPlayer().then(() => {
       setAppReady(true);
