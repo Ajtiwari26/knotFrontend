@@ -1,14 +1,16 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Dimensions, Share } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Dimensions, Share, Alert, LayoutAnimation, Platform, UIManager, Animated, Easing } from 'react-native';
 import { Artwork } from '@/src/components/Artwork';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { ChevronDown, Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Heart, ListMusic, Share2, Scissors, X, Wand2, Download } from 'lucide-react-native';
+import { ChevronDown, Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Heart, ListMusic, Share2, Scissors, X, Wand2, Download, Trash2, Plus, Edit2, Check, Copy, Sliders } from 'lucide-react-native';
+import { ScrollView, TextInput } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { colors } from '@/src/theme/colors';
 import { typography } from '@/src/theme/typography';
 import { spacing, borderRadius } from '@/src/theme/spacing';
 import { usePlayerStore } from '@/src/store/playerStore';
+import LyricsService, { LyricLine } from '@/src/services/LyricsService';
 import { AudioService } from '@/src/services/AudioService';
 import { KnotService } from '@/src/services/KnotService';
 import TrackPlayer, { useProgress, State, usePlaybackState, useActiveTrack } from 'react-native-track-player';
@@ -19,7 +21,9 @@ import { AutoKnotTier } from '@/src/services/AutoKnotService';
 import DownloadService from '@/src/services/DownloadService';
 import Svg, { Path, Polyline, Line, Defs, LinearGradient as SvgLinearGradient, Stop } from 'react-native-svg';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 interface DownloadIconProps {
   progress?: number;
   color: string;
@@ -31,10 +35,10 @@ const DownloadIcon = ({ progress, color, size }: DownloadIconProps) => {
   const isDownloaded = progress === 1 || color === "#FF6D00";
 
   // Use gradient if downloading, otherwise solid color
-  const strokeColor = isDownloaded 
-    ? "#FF6D00" 
-    : isDownloading 
-      ? "url(#download-progress-grad)" 
+  const strokeColor = isDownloaded
+    ? "#FF6D00"
+    : isDownloading
+      ? "url(#download-progress-grad)"
       : color;
 
   const progressPercent = isDownloading ? `${Math.min(100, Math.max(0, progress * 100))}%` : "0%";
@@ -70,7 +74,7 @@ const DownloadIcon = ({ progress, color, size }: DownloadIconProps) => {
 };
 
 const { width } = Dimensions.get('window');
-const ART_SIZE = width - 150; // More aggressive reduction for better vertical fit
+const ART_SIZE = width - 180; // Reduced artwork to push controls lower on screen
 
 export default function PlayerScreen() {
   const router = useRouter();
@@ -87,8 +91,17 @@ export default function PlayerScreen() {
   const isPlaying = playbackState?.state === State.Playing;
 
   const [isDownloaded, setIsDownloaded] = useState(false);
+  const [isKnotManagerVisible, setIsKnotManagerVisible] = useState(false);
+  const [isNewVerModalVisible, setIsNewVerModalVisible] = useState(false);
+  const [newVerName, setNewVerName] = useState('');
+  const [editingVerId, setEditingVerId] = useState<string | null>(null);
+  const [renameVerInput, setRenameVerInput] = useState('');
   const downloadProgress = usePlayerStore(state => state.downloadProgress);
-  const songKey = currentTrack ? (currentTrack.youtube_id || currentTrack.pagalworld_url || currentTrack.pagalfree_url || currentTrack.jiosaavn_token) : null;
+  const songKey = currentTrack ? (
+    currentTrack.source === 'local'
+      ? (currentTrack.local_uri || currentTrack.filename || currentTrack.youtube_id)
+      : (currentTrack.youtube_id || currentTrack.pagalworld_url || currentTrack.pagalfree_url || currentTrack.jiosaavn_token)
+  ) : null;
   const activeProgress = songKey ? downloadProgress[songKey] : undefined;
 
   useEffect(() => {
@@ -136,7 +149,7 @@ export default function PlayerScreen() {
     }
   }, [currentTrack, activeTrack]);
 
-  const { position, duration } = useProgress(250);
+  const { position, duration } = useProgress(100);
 
   const library = useLibraryStore();
   const trackId = currentTrack ? (currentTrack.source === 'youtube' ? currentTrack.youtube_id : currentTrack.local_uri) : '';
@@ -162,36 +175,174 @@ export default function PlayerScreen() {
     setIsPlayingStore(isPlaying);
   }, [isPlaying]);
 
+  // Clear local pending knot markers instantly when track changes to prevent visual layout jank!
+  useEffect(() => {
+    setPendingA(null);
+    setPendingB(null);
+  }, [currentTrack]);
+
+  const [lyrics, setLyrics] = useState<LyricLine[]>([]);
+
+  useEffect(() => {
+    if (!currentTrack) {
+      setLyrics([]);
+      return;
+    }
+    const cached = LyricsService.getCachedLyrics(currentTrack);
+    if (cached) {
+      setLyrics(cached.lyrics);
+    } else {
+      LyricsService.getLyrics(currentTrack)
+        .then((res) => setLyrics(res.lyrics))
+        .catch((err) => console.warn('[Player] Error fetching lyrics:', err));
+    }
+  }, [currentTrack]);
+
+  const lyricOffsets = usePlayerStore((state) => state.lyricOffsets);
+
+  // Trigger LayoutAnimation when active lyric line shifts
+  const [activeLyricIndex, setActiveLyricIndex] = useState(-1);
+
+  const animatedActiveIdx = useRef(new Animated.Value(-1)).current;
+
+  useEffect(() => {
+    Animated.timing(animatedActiveIdx, {
+      toValue: activeLyricIndex,
+      duration: 220, // Snappier scroll transitions to align visuals perfectly with audio play
+      easing: Easing.out(Easing.ease),
+      useNativeDriver: true,
+    }).start();
+  }, [activeLyricIndex]);
+
+  useEffect(() => {
+    if (lyrics.length === 0) {
+      setActiveLyricIndex(-1);
+      return;
+    }
+    const trackKey = currentTrack ? (
+      currentTrack.youtube_id || currentTrack.jiosaavn_token || currentTrack.pagalworld_url || currentTrack.pagalfree_url || currentTrack.local_uri || 'knot-track'
+    ) : 'knot-track';
+
+    const syncOffsetMs = lyricOffsets[trackKey] || 0;
+    const positionMs = position * 1000 + syncOffsetMs + 220; // 220ms lookahead to compensate for TrackPlayer polling + transition duration latency!
+
+    let activeIdx = -1;
+    for (let i = 0; i < lyrics.length; i++) {
+      if (positionMs >= lyrics[i].timeMs) {
+        activeIdx = i;
+      } else {
+        break;
+      }
+    }
+
+    if (activeIdx !== activeLyricIndex) {
+      // Smooth teleprompter layout transition
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setActiveLyricIndex(activeIdx);
+    }
+  }, [position, lyrics, currentTrack]);
+
+  const getDisplayLines = () => {
+    if (lyrics.length === 0) {
+      return [
+        { text: '• • •' },
+        { text: 'Loading lyrics...' },
+        { text: '• • •' }
+      ];
+    }
+
+    if (lyrics.length === 1 && lyrics[0].text === "Lyrics not available for this track") {
+      return [
+        { text: '• • •' },
+        { text: 'Lyrics not available' },
+        { text: '• • •' }
+      ];
+    }
+
+    return [
+      { text: '• • •' },
+      { text: 'Intro / Instrumental' },
+      ...lyrics,
+      { text: '• • •' },
+      { text: '• • •' }
+    ];
+  };
+
 
 
   // Auto-save knots when they change (user edits them)
   useEffect(() => {
     const save = async () => {
       if (!currentTrack) return;
-      const songKey = currentTrack.source === 'local' 
-        ? currentTrack.local_uri 
+      const songKey = currentTrack.source === 'local'
+        ? currentTrack.local_uri
         : (currentTrack.youtube_id || currentTrack.pagalworld_url || currentTrack.pagalfree_url || currentTrack.jiosaavn_token);
       if (!songKey) return;
 
-      if (knots.length === 0) {
-        // User cleared all knots — delete from storage so they don't come back as phantoms
+      const currentActiveKnot = usePlayerStore.getState().activeKnot;
+      const activeVerId = currentActiveKnot?.activeVersionId || 'v-default';
+      const activeVerName = currentActiveKnot?.versions?.find(v => v.id === activeVerId)?.name || currentActiveKnot?.name || 'Saved Loop';
+
+      const updatedJunctions = knots.map(k => ({
+        start_ms: k.startTime * 1000,
+        end_ms: k.endTime * 1000,
+        active: k.active !== false
+      }));
+
+      // Reconstruct versions array
+      let updatedVersions = currentActiveKnot?.versions || [
+        {
+          id: 'v-default',
+          name: activeVerName,
+          junctions: updatedJunctions
+        }
+      ];
+
+      let found = false;
+      updatedVersions = updatedVersions.map(v => {
+        if (v.id === activeVerId) {
+          found = true;
+          return { ...v, junctions: updatedJunctions };
+        }
+        return v;
+      });
+
+      if (!found) {
+        updatedVersions.push({
+          id: activeVerId,
+          name: activeVerName,
+          junctions: updatedJunctions
+        });
+      }
+
+      // If all versions are empty and no knots exist at all anywhere, only then delete the knot completely!
+      const totalJunctions = updatedVersions.reduce((acc, curr) => acc + curr.junctions.length, 0);
+      if (totalJunctions === 0) {
         await KnotService.deleteKnot(songKey);
         usePlayerStore.getState().setActiveKnot(null);
         return;
       }
 
       const knotData = {
+        ...currentActiveKnot,
         _id: songKey,
-        name: 'Saved Loop',
-        junctions: knots.map(k => ({ start_ms: k.startTime * 1000, end_ms: k.endTime * 1000 })),
+        name: activeVerName,
+        junctions: updatedJunctions,
         knotted_duration_ms: 0,
         original_duration_ms: currentTrack.duration_ms,
         title: currentTrack.title,
         artist: currentTrack.artist,
+        // NOTE: thumbnail and source intentionally NOT stored in knot data
+        // — they belong to the track and caused cross-song image bleeding.
+        activeVersionId: activeVerId,
+        versions: updatedVersions
       };
-      await KnotService.saveKnot(songKey, knotData);
 
-      // Sync to backend for cross-install persistence
+      await KnotService.saveKnot(songKey, knotData);
+      usePlayerStore.getState().setActiveKnot(knotData);
+
+      // Sync to backend for authenticated users & cross-install persistence
+      KnotService.syncAllKnotsToBackend().catch(() => {});
       if (currentTrack.source === 'local') {
         KnotService.syncToBackend(currentTrack, knotData);
       }
@@ -199,554 +350,1368 @@ export default function PlayerScreen() {
     save();
   }, [knots, currentTrack]);
 
-  const handlePlayPause = async () => {
-    await AudioService.togglePlayPause();
+  // Knot Version Management Action Handlers
+  const handleSwitchVersion = async (versionId: string) => {
+    if (!currentTrack || !activeKnot) return;
+
+    const songKey = currentTrack.source === 'local'
+      ? currentTrack.local_uri
+      : (currentTrack.youtube_id || currentTrack.pagalworld_url || currentTrack.pagalfree_url || currentTrack.jiosaavn_token);
+    if (!songKey) return;
+
+    const version = activeKnot.versions?.find(v => v.id === versionId);
+    if (!version) return;
+
+    const updatedKnot = {
+      ...activeKnot,
+      activeVersionId: versionId,
+      name: version.name,
+      junctions: version.junctions
+    };
+
+    await KnotService.saveKnot(songKey, updatedKnot);
+
+    if (currentTrack.source === 'local') {
+      KnotService.syncToBackend(currentTrack, updatedKnot);
+    }
+
+    usePlayerStore.getState().setActiveKnot(updatedKnot);
+    usePlayerStore.getState().setKnots(version.junctions.map(j => ({
+      startTime: j.start_ms / 1000,
+      endTime: j.end_ms / 1000,
+      active: j.active !== false
+    })));
   };
 
+  const handleCreateVersion = async (name: string, cloneCurrent: boolean) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+
+    if (!currentTrack) return;
+    const songKey = currentTrack.source === 'local'
+      ? currentTrack.local_uri
+      : (currentTrack.youtube_id || currentTrack.pagalworld_url || currentTrack.pagalfree_url || currentTrack.jiosaavn_token);
+    if (!songKey) return;
+
+    const newId = `v-${Date.now()}`;
+    const newJunctions = cloneCurrent ? knots.map(k => ({
+      start_ms: k.startTime * 1000,
+      end_ms: k.endTime * 1000,
+      active: k.active !== false
+    })) : [];
+
+    const newVer = {
+      id: newId,
+      name: trimmed,
+      junctions: newJunctions
+    };
+
+    let updatedVersions = activeKnot?.versions || [];
+    // If empty versions array, backfill the default current one
+    if (updatedVersions.length === 0 && activeKnot) {
+      updatedVersions = [{
+        id: 'v-default',
+        name: activeKnot.name || 'Default Knot',
+        junctions: activeKnot.junctions || []
+      }];
+    }
+
+    updatedVersions.push(newVer);
+
+    const updatedKnot = {
+      ...activeKnot,
+      _id: songKey,
+      name: trimmed,
+      activeVersionId: newId,
+      junctions: newJunctions,
+      versions: updatedVersions
+    };
+
+    await KnotService.saveKnot(songKey, updatedKnot);
+
+    if (currentTrack.source === 'local') {
+      KnotService.syncToBackend(currentTrack, updatedKnot);
+    }
+
+    usePlayerStore.getState().setActiveKnot(updatedKnot as any);
+    usePlayerStore.getState().setKnots(cloneCurrent ? knots : []);
+    setIsNewVerModalVisible(false);
+    setNewVerName('');
+  };
+
+  const handleRenameVersion = async (versionId: string, newName: string) => {
+    const trimmed = newName.trim();
+    if (!trimmed) return;
+
+    if (!currentTrack || !activeKnot || !activeKnot.versions) return;
+    const songKey = currentTrack.source === 'local'
+      ? currentTrack.local_uri
+      : (currentTrack.youtube_id || currentTrack.pagalworld_url || currentTrack.pagalfree_url || currentTrack.jiosaavn_token);
+    if (!songKey) return;
+
+    const updatedVersions = activeKnot.versions.map(v => {
+      if (v.id === versionId) {
+        return { ...v, name: trimmed };
+      }
+      return v;
+    });
+
+    const isCurrentActive = activeKnot.activeVersionId === versionId;
+
+    const updatedKnot = {
+      ...activeKnot,
+      name: isCurrentActive ? trimmed : activeKnot.name,
+      versions: updatedVersions
+    };
+
+    await KnotService.saveKnot(songKey, updatedKnot);
+
+    if (currentTrack.source === 'local') {
+      KnotService.syncToBackend(currentTrack, updatedKnot);
+    }
+
+    usePlayerStore.getState().setActiveKnot(updatedKnot);
+    setEditingVerId(null);
+    setRenameVerInput('');
+  };
+
+  const handleDeleteVersion = async (versionId: string) => {
+    if (!currentTrack || !activeKnot || !activeKnot.versions) return;
+    if (activeKnot.versions.length <= 1) {
+      Alert.alert('Cannot Delete', 'You must keep at least one version.');
+      return;
+    }
+
+    const songKey = currentTrack.source === 'local'
+      ? currentTrack.local_uri
+      : (currentTrack.youtube_id || currentTrack.pagalworld_url || currentTrack.pagalfree_url || currentTrack.jiosaavn_token);
+    if (!songKey) return;
+
+    const updatedVersions = activeKnot.versions.filter(v => v.id !== versionId);
+    let nextActiveId = activeKnot.activeVersionId;
+    let nextName = activeKnot.name;
+    let nextJunctions = activeKnot.junctions;
+
+    // If deleting current active version, switch to the first remaining version
+    if (activeKnot.activeVersionId === versionId) {
+      const fallback = updatedVersions[0];
+      nextActiveId = fallback.id;
+      nextName = fallback.name;
+      nextJunctions = fallback.junctions;
+    }
+
+    const updatedKnot = {
+      ...activeKnot,
+      name: nextName,
+      activeVersionId: nextActiveId,
+      junctions: nextJunctions,
+      versions: updatedVersions
+    };
+
+    await KnotService.saveKnot(songKey, updatedKnot);
+
+    if (currentTrack.source === 'local') {
+      KnotService.syncToBackend(currentTrack, updatedKnot);
+    }
+
+    usePlayerStore.getState().setActiveKnot(updatedKnot);
+    if (activeKnot.activeVersionId === versionId) {
+      usePlayerStore.getState().setKnots(nextJunctions.map(j => ({
+        startTime: j.start_ms / 1000,
+        endTime: j.end_ms / 1000,
+        active: j.active !== false
+      })));
+    }
+  };
+
+  const handleShare = async () => {
+    if (!currentTrack) return;
+    try {
+      await Share.share({
+        message: `Check out "${currentTrack.title}" by ${currentTrack.artist} on Knot!`,
+      });
+    } catch (error) {
+      console.log('Error sharing:', error);
+    }
+  };
+
+  const setKnottingStatus = usePlayerStore(state => state.setKnottingStatus);
+  const setKnottingProgress = usePlayerStore(state => state.setKnottingProgress);
+  const setKnottingPhase = usePlayerStore(state => state.setKnottingPhase);
+  const setPendingKnots = usePlayerStore(state => state.setPendingKnots);
+
+  const handleAutoKnotSelect = async (tier: AutoKnotTier) => {
+    if (!currentTrack) return;
+    setAutoKnotVisible(false);
+
+    try {
+      setKnottingStatus('uploading');
+      setKnottingProgress(0.1);
+      setKnottingPhase('Initializing Auto-Knot pipeline...');
+
+      const { AutoKnotService } = require('@/src/services/AutoKnotService');
+      const result = await AutoKnotService.generateKnots(
+        currentTrack,
+        tier,
+        (progress, phase) => {
+          setKnottingProgress(progress);
+          setKnottingPhase(phase);
+        }
+      );
+
+      setKnottingStatus('done');
+      setPendingKnots(result.knots);
+    } catch (error: any) {
+      console.error('[Player] AutoKnot error:', error);
+      setKnottingStatus('error');
+      setKnottingPhase(error.message || 'Auto-knotting failed');
+      Alert.alert('Auto-Knot Failed', error.message || 'Failed to auto-knot track. Please try again.');
+    }
+  };
+
+  const handleAcceptAutoKnots = async () => {
+    if (!pendingKnots || !currentTrack) return;
+
+    // Apply pending knots to store
+    setKnots(pendingKnots);
+
+    // Save knot to storage
+    const songKey = currentTrack.source === 'local'
+      ? currentTrack.local_uri
+      : (currentTrack.youtube_id || currentTrack.pagalworld_url || currentTrack.pagalfree_url || currentTrack.jiosaavn_token);
+
+    if (songKey) {
+      const junctions = pendingKnots.map(k => ({
+        start_ms: k.startTime * 1000,
+        end_ms: k.endTime * 1000,
+        active: true
+      }));
+
+      const activeVerId = activeKnot?.activeVersionId || 'v-default';
+      const activeVerName = activeKnot?.versions?.find(v => v.id === activeVerId)?.name || activeKnot?.name || 'Auto-Knot Version';
+
+      let updatedVersions = activeKnot?.versions || [{
+        id: 'v-default',
+        name: activeVerName,
+        junctions
+      }];
+
+      let found = false;
+      updatedVersions = updatedVersions.map(v => {
+        if (v.id === activeVerId) {
+          found = true;
+          return { ...v, junctions };
+        }
+        return v;
+      });
+
+      if (!found) {
+        updatedVersions.push({
+          id: activeVerId,
+          name: activeVerName,
+          junctions
+        });
+      }
+
+      const knotData = {
+        _id: songKey,
+        name: activeVerName,
+        junctions: junctions,
+        knotted_duration_ms: 0,
+        original_duration_ms: currentTrack.duration_ms,
+        title: currentTrack.title,
+        artist: currentTrack.artist,
+        activeVersionId: activeVerId,
+        versions: updatedVersions
+      };
+
+      await KnotService.saveKnot(songKey, knotData);
+      usePlayerStore.getState().setActiveKnot(knotData);
+    }
+
+    setPendingKnots(null);
+    setKnottingStatus('idle');
+  };
+
+  const handleDiscardAutoKnots = () => {
+    setPendingKnots(null);
+    setKnottingStatus('idle');
+  };
+
+  const handleSeek = async (value: number) => {
+    // Jump seek directly without fading audio down/up to avoid mute drop!
+    await AudioService.seekToSmoothly(value);
+  };
+
+  const formatTime = (secs: number) => {
+    const m = Math.floor(secs / 60);
+    const s = Math.floor(secs % 60);
+    return `${m}:${s < 10 ? '0' : ''}${s}`;
+  };
+
+  const repeatMode = usePlayerStore(state => state.repeatMode);
+  const shuffle = usePlayerStore(state => state.shuffle);
+  const cyclePlaybackMode = usePlayerStore(state => state.cyclePlaybackMode);
+  const nextTrack = usePlayerStore(state => state.nextTrack);
+  const prevTrack = usePlayerStore(state => state.prevTrack);
+
   const handleNext = async () => {
-    usePlayerStore.getState().nextTrack();
-    const newTrack = usePlayerStore.getState().currentTrack;
-    if (newTrack) {
-      await AudioService.playQueueTrack(newTrack);
+    nextTrack();
+    const next = usePlayerStore.getState().currentTrack;
+    if (next) {
+      await AudioService.playQueueTrack(next);
     }
   };
 
   const handlePrev = async () => {
-    usePlayerStore.getState().prevTrack();
-    const newTrack = usePlayerStore.getState().currentTrack;
-    if (newTrack) {
-      await AudioService.playQueueTrack(newTrack);
+    prevTrack();
+    const prev = usePlayerStore.getState().currentTrack;
+    if (prev) {
+      await AudioService.playQueueTrack(prev);
     }
   };
 
-  const toggleShuffle = () => {
-    const s = usePlayerStore.getState();
-    s.setShuffle(!s.shuffle);
-  };
-
-  const toggleRepeat = () => {
-    const s = usePlayerStore.getState();
-    const modes: ('off' | 'track' | 'list')[] = ['off', 'track', 'list'];
-    const nextMode = modes[(modes.indexOf(s.repeatMode) + 1) % modes.length];
-    s.setRepeatMode(nextMode);
-  };
-
-  const shareTrack = async () => {
+  const handleDownload = async () => {
     if (!currentTrack) return;
+
+    if (currentTrack.source === 'local') {
+      Alert.alert('Local File', 'This file is already on your device.');
+      return;
+    }
+
+    if (isDownloaded) {
+      Alert.alert('Downloaded', 'This track is already saved to your local downloads.');
+      return;
+    }
+
     try {
-      await Share.share({
-        message: `Listen to ${currentTrack.title} by ${currentTrack.artist} on Knot!`,
-      });
-    } catch (error) {
-      console.error('Error sharing track:', error);
+      await DownloadService.downloadTrack(currentTrack);
+      setIsDownloaded(true);
+      Alert.alert('Success', `"${currentTrack.title}" saved for offline playback!`);
+    } catch (error: any) {
+      Alert.alert('Download Failed', error.message || 'Could not download track');
     }
   };
 
-  const shuffle = usePlayerStore(s => s.shuffle);
-  const repeatMode = usePlayerStore(s => s.repeatMode);
+  // Add a knot junction at current playback position
+  const handleAddKnot = () => {
+    if (duration <= 0) return;
+    const defaultLen = Math.min(10, duration - position); // 10s default length or remaining duration
+    if (defaultLen <= 0) return;
 
-  const handleSeek = (pos: number) => {
-    AudioService.seekTo(pos);
+    const newKnot: Knot = {
+      startTime: position,
+      endTime: position + defaultLen,
+      active: true,
+    };
+
+    setKnots(prev => [...prev, newKnot]);
   };
 
-  const handleMarkA = () => setPendingA(position);
-  const handleMarkB = () => setPendingB(position);
-
-  const handleTieKnot = () => {
-    if (pendingA !== null && pendingB !== null) {
-      const newKnot: Knot = {
-        startTime: Math.min(pendingA, pendingB),
-        endTime: Math.max(pendingA, pendingB),
-        active: true,
-      };
-      setKnots(prev => [...prev, newKnot]);
-      setPendingA(null);
-      setPendingB(null);
-    }
-  };
-
-  const handleKnotToggle = (index: number) => {
-    setKnots(prev => prev.map((k, i) => i === index ? { ...k, active: !k.active } : k));
-  };
-
-  const handleKnotMerge = (idx1: number, idx2: number) => {
-    setKnots(prev => {
-      const k1 = prev[idx1];
-      const k2 = prev[idx2];
-      if (!k1 || !k2) return prev;
-
-      const newKnot: Knot = {
-        startTime: Math.min(k1.startTime, k2.startTime),
-        endTime: Math.max(k1.endTime, k2.endTime),
-        active: true,
-        // Keep track of the original sub-knots so we can un-merge later
-        subKnots: [...(k1.subKnots || [k1]), ...(k2.subKnots || [k2])],
-      };
-
-      // Filter out both old knots and add the merged one
-      const filtered = prev.filter((_, i) => i !== idx1 && i !== idx2);
-      return [...filtered, newKnot];
-    });
-  };
-
-  const handleKnotSplit = (index: number) => {
-    setKnots(prev => {
-      const knot = prev[index];
-      if (!knot || !knot.subKnots || knot.subKnots.length === 0) return prev;
-
-      // Remove the merged knot and add its constituent sub-knots back
-      const filtered = prev.filter((_, i) => i !== index);
-      return [...filtered, ...knot.subKnots];
-    });
-  };
-
-  const handleKnotDelete = (index: number) => {
+  // Delete a specific knot
+  const handleDeleteKnot = (index: number) => {
     setKnots(prev => prev.filter((_, i) => i !== index));
   };
 
-  const handleClearKnots = async () => {
-    setKnots([]);
+  // Toggle knot active state
+  const handleToggleKnot = (index: number) => {
+    setKnots(prev => prev.map((k, i) => i === index ? { ...k, active: !k.active } : k));
+  };
+
+  // Set A/B points
+  const handleSetA = () => {
+    setPendingA(position);
+  };
+
+  const handleSetB = () => {
+    if (pendingA === null) return;
+    const start = Math.min(pendingA, position);
+    const end = Math.max(pendingA, position);
+    if (end - start < 0.5) return; // Min 0.5s knot
+
+    const newKnot: Knot = {
+      startTime: start,
+      endTime: end,
+      active: true,
+    };
+
+    setKnots(prev => [...prev, newKnot]);
     setPendingA(null);
-    setPendingB(null);
-    // Immediately delete from persistent storage
-    if (currentTrack) {
-      const songKey = currentTrack.source === 'local' 
-        ? currentTrack.local_uri 
-        : (currentTrack.youtube_id || currentTrack.pagalworld_url || currentTrack.pagalfree_url || currentTrack.jiosaavn_token);
-      if (songKey) {
-        await KnotService.deleteKnot(songKey);
-        usePlayerStore.getState().setActiveKnot(null);
-      }
-    }
   };
 
-  const handleUndoLastKnot = () => {
-    // Revert to LIFO (Last-In-First-Out) creation order as clarified by the user
-    setKnots(prev => prev.slice(0, -1));
+  const handleClearAB = () => {
+    setPendingA(null);
   };
-
-  // Audio skip logic has been moved to GlobalPlayerController for cross-screen support
-
-  const formatTime = (ms: number) => {
-    const totalSeconds = Math.floor(ms / 1000);
-    const m = Math.floor(totalSeconds / 60);
-    const s = String(totalSeconds % 60).padStart(2, '0');
-    return `${m}:${s}`;
-  };
-
-  const getKnottedDuration = () => {
-    if (!currentTrack) return 0;
-    let knotTime = 0;
-    for (const k of knots) {
-      if (k.active) knotTime += (k.endTime - k.startTime);
-    }
-    const total = duration > 0 ? duration : (currentTrack.duration_ms / 1000) || 0;
-    return Math.max(0, total - knotTime);
-  };
-
-  const knottedDuration = getKnottedDuration();
 
   if (!currentTrack) {
     return (
       <SafeAreaView style={s.safe}>
         <View style={s.header}>
-          <TouchableOpacity onPress={() => router.back()} style={s.headerBtn}>
+          <TouchableOpacity style={s.iconBtn} onPress={() => router.back()}>
             <ChevronDown size={28} color={colors.text} />
           </TouchableOpacity>
         </View>
-        <Text style={{ textAlign: 'center', color: colors.text, marginTop: 40 }}>No track playing</Text>
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+          <Text style={{ fontFamily: typography.fontFamily.semibold, color: colors.textSecondary }}>
+            No track playing
+          </Text>
+        </View>
       </SafeAreaView>
     );
   }
 
-  const hasKnots = knots.length > 0;
-  const hasPending = pendingA !== null || pendingB !== null;
-  const canTie = pendingA !== null && pendingB !== null;
-
   return (
     <SafeAreaView style={s.safe}>
-      {/* Header */}
+      {/* Top Bar */}
       <View style={s.header}>
-        <TouchableOpacity onPress={() => router.back()} style={s.headerBtn}>
+        <TouchableOpacity style={s.iconBtn} onPress={() => router.back()}>
           <ChevronDown size={28} color={colors.text} />
         </TouchableOpacity>
-        <View style={s.headerCenter}>
-          <Text style={s.headerLabel}>PLAYING FROM</Text>
-          <Text style={s.headerSource}>Your Library</Text>
+        <View style={s.headerTitleWrap}>
+          <Text style={s.headerKicker}>PLAYING FROM SEARCH</Text>
+          <Text style={s.headerTitle} numberOfLines={1}>{currentTrack.title}</Text>
         </View>
-        <TouchableOpacity onPress={() => router.push('/queue')} style={s.headerBtn}>
+        <TouchableOpacity style={s.iconBtn} onPress={() => router.push('/queue')}>
           <ListMusic size={22} color={colors.text} />
         </TouchableOpacity>
       </View>
 
-      {/* Album Art */}
-      <View style={s.artWrap}>
-        <Artwork 
-          uri={currentTrack.thumbnail || (typeof activeTrack?.artwork === 'string' ? activeTrack.artwork : undefined)} 
-          thumbnail={currentTrack.thumbnail || (typeof activeTrack?.artwork === 'string' ? activeTrack.artwork : undefined)} 
-          style={s.art} 
-          onImageError={() => {
-            if (activeTrack) {
-              AudioService.setFallbackArtwork();
-            }
-          }}
-        />
-      </View>
-
-      {/* Track Info */}
-      <View style={s.info}>
-        <View style={s.titleRow}>
-          <View style={{ flex: 1 }}>
-            <Text style={s.title} numberOfLines={1}>{currentTrack.title || 'Unknown Track'}</Text>
-            <Text style={s.artist} numberOfLines={1}>{currentTrack.artist || 'Unknown Artist'}</Text>
-          </View>
-          <TouchableOpacity onPress={toggleLike}>
-            <Heart size={24} color={colors.primary} fill={liked ? colors.primary : 'transparent'} />
-          </TouchableOpacity>
-        </View>
-
-        {/* Knot Badge */}
-        {activeKnot ? (
-          <TouchableOpacity style={s.knotBadge} onPress={() => router.push('/knot-editor')}>
-            <View style={s.knotDot} />
-            <Text style={s.knotText}>{activeKnot.name} Active</Text>
-            <Text style={s.knotEdit}>EDIT</Text>
-          </TouchableOpacity>
-        ) : (
-          <TouchableOpacity style={[s.knotBadge, { backgroundColor: colors.surfaceContainerLowest }]} onPress={() => router.push('/knot-editor')}>
-            <Text style={[s.knotText, { color: colors.textSecondary }]}>Create a Knot</Text>
-          </TouchableOpacity>
-        )}
-      </View>
-
-      {/* Rope Seekbar */}
-      <RopeSeekbar
-        duration={duration > 0 ? duration : (currentTrack.duration_ms / 1000) || 0}
-        position={position}
-        knots={knots}
-        pendingA={pendingA}
-        pendingB={pendingB}
-        onSeek={handleSeek}
-        onKnotToggle={handleKnotToggle}
-        onKnotMerge={handleKnotMerge}
-        onKnotDoubleTap={handleKnotSplit}
-        onKnotDelete={handleKnotDelete}
-      />
-      <View style={s.timeRow}>
-        <Text style={s.time}>{formatTime(position * 1000)}</Text>
-        
-        <View style={{ flexDirection: 'row', gap: 6 }}>
-          {knottedDuration < duration - 1 && (
-            <Text style={[s.time, { textDecorationLine: 'line-through', opacity: 0.5 }]}>
-              {formatTime(duration * 1000)}
-            </Text>
-          )}
-          <Text style={[s.time, { color: knottedDuration < duration - 1 ? colors.primary : colors.textSecondary, fontWeight: 'bold' }]}>
-            {formatTime(knottedDuration * 1000)}
-          </Text>
-        </View>
-      </View>
-
-      {/* Background Knotting Status Label */}
-      {knottingStatus !== 'idle' && (
-        <View style={s.knottingStatusRow}>
-          {knottingStatus === 'done' ? (
-            <TouchableOpacity 
-              style={s.applyKnotsBtn} 
-              onPress={() => {
-                if (pendingKnots) setKnots(pendingKnots);
-                usePlayerStore.getState().setKnottingStatus('idle');
-                usePlayerStore.getState().setPendingKnots(null);
-              }}
-            >
-              <Wand2 size={14} color="#FFF" />
-              <Text style={s.applyKnotsText}>Apply Auto-Knots</Text>
-            </TouchableOpacity>
-          ) : knottingStatus === 'error' ? (
-            <TouchableOpacity onPress={() => usePlayerStore.getState().setKnottingStatus('idle')}>
-              <Text style={[s.statusText, { color: colors.error }]}>⚠️ Analysis Failed. Tap to clear.</Text>
-            </TouchableOpacity>
-          ) : (
-            <View style={s.statusLoadingRow}>
-              <View style={s.orangeDot} />
-              <Text style={s.statusText}>
-                {`${knottingPhase} ${Math.round(knottingProgress)}%`}
-              </Text>
-              <Text style={[s.statusText, { color: colors.textSecondary, fontSize: 10, textTransform: 'none' }]}>
-                (Do not close player)
-              </Text>
-            </View>
-          )}
-        </View>
-      )}
-
-      {/* Knot Controls */}
-      <View style={s.knotActionRow}>
-        <TouchableOpacity
-          style={[s.knotActionBtn, pendingA !== null && s.knotActionBtnActive]}
-          onPress={handleMarkA}
-        >
-          <Text style={[s.knotActionText, pendingA !== null && s.knotActionTextActive]}>Mark A</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[s.knotActionBtn, pendingB !== null && s.knotActionBtnActive]}
-          onPress={handleMarkB}
-        >
-          <Text style={[s.knotActionText, pendingB !== null && s.knotActionTextActive]}>Mark B</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[s.knotTieBtn, canTie && s.knotTieBtnReady]}
-          onPress={handleTieKnot}
-          disabled={!canTie}
-        >
-          <Scissors size={14} color={canTie ? '#FFF' : colors.textSecondary} />
-          <Text style={[s.knotTieText, canTie && s.knotTieTextReady]}>Knot</Text>
-        </TouchableOpacity>
-        {hasKnots ? (
-          <TouchableOpacity style={s.knotUndoBtn} onPress={handleUndoLastKnot}>
-            <X size={14} color={colors.textSecondary} />
-          </TouchableOpacity>
-        ) : null}
-      </View>
-
-      {/* Knot count indicator */}
-      {hasKnots ? (
-        <View style={s.knotCountRow}>
-          <Text style={s.knotCountText}>{knots.length} knot{knots.length > 1 ? 's' : ''} tied</Text>
-          <TouchableOpacity onPress={handleClearKnots}>
-            <Text style={s.knotClearText}>Clear all</Text>
-          </TouchableOpacity>
-        </View>
-      ) : null}
-
-      {/* Transport Controls */}
-      <View style={s.controls}>
-        <TouchableOpacity 
-          style={[
-            styles.cycleBtn,
-            (isDownloaded || (activeProgress !== undefined && activeProgress > 0)) && styles.cycleBtnActive
-          ]} 
-          onPress={() => DownloadService.downloadTrack(currentTrack)}
-        >
-          <DownloadIcon 
-            progress={activeProgress} 
-            color={isDownloaded ? "#FF6D00" : colors.textSecondary} 
-            size={32} 
+      {/* Main Container - Adjusted spacing so controls fit without clipping */}
+      <ScrollView
+        contentContainerStyle={[s.scrollContent, { paddingBottom: 24 }]}
+        showsVerticalScrollIndicator={false}
+        bounces={false}
+      >
+        {/* Artwork - Reduced size to pull all controls down into view */}
+        <View style={s.artContainer}>
+          <Artwork
+            uri={currentTrack.thumbnail}
+            thumbnail={currentTrack.thumbnail}
+            alt={currentTrack.title}
+            style={[s.art, { width: ART_SIZE, height: ART_SIZE }]}
           />
-        </TouchableOpacity>
-        <TouchableOpacity style={s.skipBtn} onPress={handlePrev}>
-          <SkipBack size={28} color={colors.text} fill={colors.text} />
-        </TouchableOpacity>
-        <TouchableOpacity style={s.playBtn} onPress={handlePlayPause}>
-          <LinearGradient colors={[colors.gradientStart, colors.gradientEnd]} style={s.playGradient}>
-            {isPlaying ? <Pause size={32} color={colors.onPrimary} fill={colors.onPrimary} /> : <Play size={32} color={colors.onPrimary} fill={colors.onPrimary} />}
-          </LinearGradient>
-        </TouchableOpacity>
-        <TouchableOpacity style={s.skipBtn} onPress={handleNext}>
-          <SkipForward size={28} color={colors.text} fill={colors.text} />
-        </TouchableOpacity>
-        <TouchableOpacity 
-          style={[
-            styles.cycleBtn, 
-            (repeatMode !== 'off' || shuffle) && styles.cycleBtnActive
-          ]} 
-          onPress={() => usePlayerStore.getState().cyclePlaybackMode()}
+        </View>
+
+        {/* Live Lyrics Preview Card */}
+        <TouchableOpacity
+          style={s.lyricsPreviewCard}
+          activeOpacity={0.9}
+          onPress={() => router.push('/lyrics')}
         >
-          {shuffle ? (
-            <Shuffle size={32} color="#FF6D00" />
-          ) : (
-            <>
-              <Repeat 
-                size={32} 
-                color={repeatMode !== 'off' ? "#FF6D00" : colors.textSecondary} 
-              />
-              {repeatMode === 'track' && (
-                <Text style={styles.cycleBadge}>1</Text>
+          <View style={s.lyricsHeaderRow}>
+            <View style={s.lyricsHeaderLeft}>
+              <View style={s.lyricsLiveDot} />
+              <Text style={s.lyricsHeaderTitle}>SYNCED LYRICS</Text>
+            </View>
+            <Text style={s.lyricsHeaderTapHint}>Tap for full screen ›</Text>
+          </View>
+          <View style={s.lyricsTeleprompterWrap}>
+            {getDisplayLines().map((line, idx) => {
+              const isCenter = idx === 2;
+              const isNear = idx === 1 || idx === 3;
+
+              return (
+                <Animated.View
+                  key={idx}
+                  style={[
+                    s.lyricsLineBox,
+                    {
+                      transform: [
+                        {
+                          translateY: animatedActiveIdx.interpolate({
+                            inputRange: [-1, 0, 1, 100],
+                            outputRange: [0, 0, -2, -200], // Subtle smooth fluid alignment
+                            extrapolate: 'clamp',
+                          }),
+                        },
+                      ],
+                    },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      s.lyricsLineText,
+                      isCenter && s.lyricsLineTextActive,
+                      isNear && s.lyricsLineTextNear,
+                      !isCenter && !isNear && s.lyricsLineTextFar,
+                    ]}
+                    numberOfLines={1}
+                  >
+                    {line.text}
+                  </Text>
+                </Animated.View>
+              );
+            })}
+          </View>
+        </TouchableOpacity>
+
+        {/* Title & Artist Row */}
+        <View style={s.titleRow}>
+          <View style={s.titleWrap}>
+            <Text style={s.songTitle} numberOfLines={1}>{currentTrack.title}</Text>
+            <Text style={s.artistName} numberOfLines={1}>{currentTrack.artist}</Text>
+          </View>
+          <View style={s.titleActions}>
+            <TouchableOpacity onPress={handleDownload} style={s.heartBtn}>
+              {activeProgress !== undefined && activeProgress > 0 && activeProgress < 1 ? (
+                <DownloadIcon progress={activeProgress} color={colors.textSecondary} size={22} />
+              ) : isDownloaded ? (
+                <DownloadIcon progress={1.0} color="#FF6D00" size={22} />
+              ) : (
+                <DownloadIcon progress={0} color={colors.textSecondary} size={22} />
               )}
+            </TouchableOpacity>
+            <TouchableOpacity onPress={toggleLike} style={s.heartBtn}>
+              <Heart
+                size={22}
+                color={liked ? colors.primary : colors.textSecondary}
+                fill={liked ? colors.primary : 'none'}
+              />
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* Interactive Rope Seekbar (Multiknot support) */}
+        <View style={s.ropeSeekbarWrapper}>
+          <RopeSeekbar
+            duration={duration}
+            position={position}
+            knots={pendingKnots || knots}
+            pendingA={pendingA}
+            onSeek={handleSeek}
+            onKnotChange={setKnots}
+          />
+        </View>
+
+        {/* Knot Control Bar (Scissors, A/B markers, Auto-Knot) */}
+        <View style={s.knotBar}>
+          {pendingKnots ? (
+            /* Auto-Knot Preview Mode Actions */
+            <View style={s.autoKnotPreviewBar}>
+              <Text style={s.autoKnotPreviewText}>Auto-Knot Preview ({pendingKnots.length} knots)</Text>
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                <TouchableOpacity style={s.discardBtn} onPress={handleDiscardAutoKnots}>
+                  <X size={16} color={colors.text} />
+                  <Text style={s.discardBtnText}>Discard</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={s.acceptBtn} onPress={handleAcceptAutoKnots}>
+                  <Check size={16} color={colors.onPrimary} />
+                  <Text style={s.acceptBtnText}>Apply Knots</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : (
+            /* Standard Manual & AI Knotting Controls */
+            <>
+              <TouchableOpacity style={s.knotActionBtn} onPress={handleAddKnot}>
+                <Scissors size={16} color={colors.primary} />
+                <Text style={s.knotActionText}>+ Quick Knot</Text>
+              </TouchableOpacity>
+
+              {/* A/B Knot Creator */}
+              {pendingA === null ? (
+                <TouchableOpacity style={s.knotActionBtn} onPress={handleSetA}>
+                  <Text style={s.abText}>Set A</Text>
+                </TouchableOpacity>
+              ) : (
+                <View style={{ flexDirection: 'row', gap: 6 }}>
+                  <TouchableOpacity style={[s.knotActionBtn, s.activeAbBtn]} onPress={handleSetB}>
+                    <Text style={s.abTextActive}>Set B (End)</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={s.knotActionBtn} onPress={handleClearAB}>
+                    <X size={14} color={colors.textSecondary} />
+                  </TouchableOpacity>
+                </View>
+              )}
+
+              {/* Auto-Knot AI Button */}
+              <TouchableOpacity
+                style={[s.knotActionBtn, s.autoKnotBtn]}
+                onPress={() => setAutoKnotVisible(true)}
+              >
+                <LinearGradient
+                  colors={[colors.gradientStart, colors.gradientEnd]}
+                  style={s.autoKnotGradient}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                >
+                  <Wand2 size={14} color={colors.onPrimary} />
+                  <Text style={s.autoKnotText}>Auto-Knot</Text>
+                </LinearGradient>
+              </TouchableOpacity>
+
+              {/* Manage Knot Versions Button */}
+              <TouchableOpacity
+                style={s.knotActionBtn}
+                onPress={() => setIsKnotManagerVisible(true)}
+              >
+                <Sliders size={15} color={colors.textSecondary} />
+                <Text style={[s.knotActionText, { color: colors.textSecondary }]}>
+                  {activeKnot?.versions && activeKnot.versions.length > 1
+                    ? `Vers (${activeKnot.versions.length})`
+                    : 'Versions'}
+                </Text>
+              </TouchableOpacity>
             </>
           )}
-        </TouchableOpacity>
-      </View>
+        </View>
 
-      {/* Bottom Actions */}
-      <View style={s.bottomActions}>
-        <TouchableOpacity style={s.actionButton} onPress={shareTrack}>
-          <Share2 size={20} color={colors.textSecondary} />
-        </TouchableOpacity>
-        <TouchableOpacity style={s.actionButton} onPress={() => setAutoKnotVisible(true)}>
-          <View style={s.autoKnotBtn}>
-            <Wand2 size={18} color="#FF6D00" />
-            <Text style={s.autoKnotLabel}>Auto</Text>
+        {/* Active Knots List (Interactive pills to toggle/delete) */}
+        {knots.length > 0 && !pendingKnots && (
+          <View style={s.activeKnotsContainer}>
+            <View style={s.knotsHeaderRow}>
+              <Text style={s.activeKnotsTitle}>ACTIVE KNOTS ({knots.length})</Text>
+              <TouchableOpacity onPress={() => setKnots([])}>
+                <Text style={s.clearAllKnotsText}>Clear All</Text>
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.knotsPillScroll}>
+              {knots.map((knot, idx) => (
+                <TouchableOpacity
+                  key={idx}
+                  style={[s.knotPill, !knot.active && s.inactiveKnotPill]}
+                  onPress={() => handleToggleKnot(idx)}
+                >
+                  <View style={[s.knotColorDot, !knot.active && s.inactiveColorDot]} />
+                  <Text style={[s.knotPillText, !knot.active && s.inactivePillText]}>
+                    {formatTime(knot.startTime)} - {formatTime(knot.endTime)}
+                  </Text>
+                  <TouchableOpacity onPress={() => handleDeleteKnot(idx)} style={s.deleteKnotBtn}>
+                    <Trash2 size={12} color={knot.active ? colors.primary : colors.textSecondary} />
+                  </TouchableOpacity>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
           </View>
-        </TouchableOpacity>
-        <TouchableOpacity style={s.actionButton} onPress={() => router.push('/queue')}>
-          <ListMusic size={20} color={colors.textSecondary} />
-        </TouchableOpacity>
-      </View>
+        )}
 
-      {/* Auto-Knot Bottom Sheet */}
+        {/* Primary Playback Controls (Previous, Play/Pause, Next) */}
+        <View style={s.controlsRow}>
+          <TouchableOpacity onPress={cyclePlaybackMode} style={s.modeBtn}>
+            {repeatMode === 'track' ? (
+              <Repeat size={20} color={colors.primary} />
+            ) : repeatMode === 'list' ? (
+              <Repeat size={20} color={colors.primary} />
+            ) : shuffle ? (
+              <Shuffle size={20} color={colors.primary} />
+            ) : (
+              <Repeat size={20} color={colors.textSecondary} />
+            )}
+          </TouchableOpacity>
+
+          <TouchableOpacity style={s.skipBtn} onPress={handlePrev}>
+            <SkipBack size={28} color={colors.text} />
+          </TouchableOpacity>
+
+          <TouchableOpacity style={s.playBtn} onPress={() => AudioService.togglePlayPause()}>
+            {isPlaying ? (
+              <Pause size={32} color={colors.onPrimary} fill={colors.onPrimary} />
+            ) : (
+              <Play size={32} color={colors.onPrimary} fill={colors.onPrimary} style={{ marginLeft: 3 }} />
+            )}
+          </TouchableOpacity>
+
+          <TouchableOpacity style={s.skipBtn} onPress={handleNext}>
+            <SkipForward size={28} color={colors.text} />
+          </TouchableOpacity>
+
+          <TouchableOpacity onPress={handleShare} style={s.modeBtn}>
+            <Share2 size={20} color={colors.textSecondary} />
+          </TouchableOpacity>
+        </View>
+
+        {/* Bottom Utility Bar (Auto-Knot status indicator if running) */}
+        {knottingStatus === 'processing' || knottingStatus === 'uploading' ? (
+          <View style={s.aiStatusCard}>
+            <View style={s.aiStatusHeader}>
+              <Wand2 size={16} color={colors.primary} />
+              <Text style={s.aiStatusTitle}>{knottingPhase || 'Processing Auto-Knot...'}</Text>
+            </View>
+            <View style={s.progressBarTrack}>
+              <View style={[s.progressBarFill, { width: `${Math.min(100, Math.max(5, knottingProgress * 100))}%` }]} />
+            </View>
+          </View>
+        ) : null}
+      </ScrollView>
+
+      {/* Auto-Knot Selector Sheet */}
       <AutoKnotSheet
         visible={autoKnotVisible}
         onClose={() => setAutoKnotVisible(false)}
-        songUri={currentTrack.local_uri || (currentTrack.source === 'youtube' ? currentTrack.youtube_id : '') || ''}
-        songTitle={currentTrack.title || 'Unknown'}
-        durationMs={currentTrack.duration_ms || duration * 1000}
-        youtubeId={currentTrack.source === 'youtube' ? currentTrack.youtube_id : undefined}
-        onKnotsGenerated={(newKnots, tier) => {
-          setKnots(newKnots);
-          setAutoKnotVisible(false);
-        }}
+        onSelectTier={handleAutoKnotSelect}
       />
+
+      {/* Knot Version Manager Modal Sheet */}
+      {isKnotManagerVisible && (
+        <TouchableOpacity
+          style={s.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setIsKnotManagerVisible(false)}
+        >
+          <View style={s.versionSheet} onStartShouldSetResponder={() => true}>
+            <View style={s.versionSheetHeader}>
+              <Text style={s.versionSheetTitle}>Knot Versions</Text>
+              <TouchableOpacity style={s.closeSheetBtn} onPress={() => setIsKnotManagerVisible(false)}>
+                <X size={20} color={colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={s.versionSheetSub}>
+              Create, rename, or switch between different knot arrangements for this song.
+            </Text>
+
+            <ScrollView style={{ maxHeight: 260 }} showsVerticalScrollIndicator={false}>
+              {(activeKnot?.versions || [
+                {
+                  id: 'v-default',
+                  name: activeKnot?.name || 'Default Knot',
+                  junctions: activeKnot?.junctions || []
+                }
+              ]).map((ver) => {
+                const isActive = (activeKnot?.activeVersionId || 'v-default') === ver.id;
+                const isEditing = editingVerId === ver.id;
+
+                return (
+                  <View key={ver.id} style={[s.versionRow, isActive && s.activeVersionRow]}>
+                    <TouchableOpacity
+                      style={s.versionInfoBtn}
+                      onPress={() => {
+                        handleSwitchVersion(ver.id);
+                        setIsKnotManagerVisible(false);
+                      }}
+                    >
+                      <View style={[s.versionCheckDot, isActive && s.activeCheckDot]}>
+                        {isActive && <Check size={12} color={colors.onPrimary} />}
+                      </View>
+
+                      {isEditing ? (
+                        <TextInput
+                          style={s.renameInput}
+                          value={renameVerInput}
+                          onChangeText={setRenameVerInput}
+                          autoFocus
+                          onBlur={() => handleRenameVersion(ver.id, renameVerInput)}
+                          onSubmitEditing={() => handleRenameVersion(ver.id, renameVerInput)}
+                        />
+                      ) : (
+                        <View>
+                          <Text style={[s.versionNameText, isActive && s.activeVersionNameText]}>
+                            {ver.name}
+                          </Text>
+                          <Text style={s.versionMetaText}>
+                            {ver.junctions.length} junction{ver.junctions.length !== 1 ? 's' : ''}
+                          </Text>
+                        </View>
+                      )}
+                    </TouchableOpacity>
+
+                    <View style={s.versionActionsRow}>
+                      {!isEditing ? (
+                        <TouchableOpacity
+                          style={s.versionActionIcon}
+                          onPress={() => {
+                            setEditingVerId(ver.id);
+                            setRenameVerInput(ver.name);
+                          }}
+                        >
+                          <Edit2 size={16} color={colors.textSecondary} />
+                        </TouchableOpacity>
+                      ) : (
+                        <TouchableOpacity
+                          style={s.versionActionIcon}
+                          onPress={() => handleRenameVersion(ver.id, renameVerInput)}
+                        >
+                          <Check size={16} color={colors.primary} />
+                        </TouchableOpacity>
+                      )}
+
+                      {(activeKnot?.versions || []).length > 1 && (
+                        <TouchableOpacity
+                          style={s.versionActionIcon}
+                          onPress={() => handleDeleteVersion(ver.id)}
+                        >
+                          <Trash2 size={16} color={colors.error || '#FF3B30'} />
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  </View>
+                );
+              })}
+            </ScrollView>
+
+            <TouchableOpacity
+              style={s.createNewVerBtn}
+              onPress={() => {
+                setIsKnotManagerVisible(false);
+                setIsNewVerModalVisible(true);
+              }}
+            >
+              <Plus size={18} color={colors.primary} />
+              <Text style={s.createNewVerBtnText}>Create New Version</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      )}
+
+      {/* Create New Version Modal Prompt */}
+      {isNewVerModalVisible && (
+        <TouchableOpacity
+          style={s.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setIsNewVerModalVisible(false)}
+        >
+          <View style={s.newVerPromptCard} onStartShouldSetResponder={() => true}>
+            <Text style={s.promptTitle}>Create Knot Version</Text>
+            <Text style={s.promptSub}>Give your new knot arrangement a descriptive name.</Text>
+
+            <TextInput
+              style={s.promptInput}
+              placeholder="e.g. Chorus Only, Hook Remix"
+              placeholderTextColor={colors.textSecondary}
+              value={newVerName}
+              onChangeText={setNewVerName}
+              autoFocus
+            />
+
+            <View style={s.promptActionGrid}>
+              <TouchableOpacity
+                style={s.promptBtnSecondary}
+                onPress={() => handleCreateVersion(newVerName || 'New Version', false)}
+              >
+                <Text style={s.promptBtnSecondaryText}>Start Blank</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={s.promptBtnPrimary}
+                onPress={() => handleCreateVersion(newVerName || 'New Version', true)}
+              >
+                <Text style={s.promptBtnPrimaryText}>Duplicate Current</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </TouchableOpacity>
+      )}
     </SafeAreaView>
   );
 }
 
 const s = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.background, paddingBottom: spacing.md },
-  header: { flexDirection: 'row', alignItems: 'center', marginTop: spacing.xs, marginBottom: spacing.md, paddingHorizontal: spacing.xxl },
-  headerBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
-  headerCenter: { flex: 1, alignItems: 'center' },
-  headerLabel: { fontFamily: typography.fontFamily.bold, fontSize: 10, color: colors.textSecondary, letterSpacing: 1.5 },
-  headerSource: { fontFamily: typography.fontFamily.semibold, fontSize: typography.size.sm, color: colors.text, marginTop: 2 },
-  artWrap: { alignItems: 'center', marginBottom: spacing.md, paddingHorizontal: spacing.xxl },
-  art: { width: ART_SIZE, height: ART_SIZE, borderRadius: borderRadius.xl, backgroundColor: colors.surfaceContainerLow },
-  info: { marginBottom: spacing.sm, paddingHorizontal: spacing.xxl },
-  titleRow: { flexDirection: 'row', alignItems: 'flex-start' },
-  title: { fontFamily: typography.fontFamily.bold, fontSize: typography.size.xxl, color: colors.text, letterSpacing: -0.5 },
-  artist: { fontFamily: typography.fontFamily.body, fontSize: typography.size.md, color: colors.textSecondary, marginTop: 4 },
-  knotBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surfaceContainerLow, borderRadius: borderRadius.full, paddingHorizontal: 14, paddingVertical: 6, marginTop: 8, alignSelf: 'flex-start' },
-  knotDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.primaryContainer, marginRight: 8 },
-  knotText: { fontFamily: typography.fontFamily.semibold, fontSize: typography.size.xs, color: colors.text, flex: 1 },
-  knotEdit: { fontFamily: typography.fontFamily.bold, fontSize: 10, color: colors.primary, letterSpacing: 1, marginLeft: 8 },
-  progressWrap: { marginBottom: spacing.xxl },
-  progressBg: { height: 4, backgroundColor: colors.surfaceContainerHigh, borderRadius: 2, overflow: 'hidden' },
-  progressFill: { height: 4, borderRadius: 2 },
-  timeRow: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 24, marginTop: 4, zIndex: 20 },
-  time: { fontFamily: typography.fontFamily.body, fontSize: typography.size.xs, color: colors.textSecondary },
-  controls: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginBottom: spacing.md, zIndex: 20 },
-  sideControl: { padding: 10 },
-  skipBtn: { padding: 12 },
-  playBtn: { marginHorizontal: 8 },
-  playGradient: { width: 64, height: 64, borderRadius: 32, justifyContent: 'center', alignItems: 'center' },
-  bottomActions: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: spacing.hero, alignItems: 'center', paddingBottom: spacing.md },
-  actionButton: { minWidth: 44, alignItems: 'center', justifyContent: 'center' },
-  autoKnotBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: 'rgba(255,109,0,0.1)', paddingHorizontal: 14, paddingVertical: 7, borderRadius: 18, borderWidth: 1.5, borderColor: 'rgba(255,109,0,0.3)' },
-  autoKnotLabel: { fontFamily: typography.fontFamily.bold, fontSize: 12, color: '#FF6D00' },
-
-  // Knot controls
-  knotActionRow: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 10, marginTop: 8, marginBottom: 2, zIndex: 20 },
-  knotActionBtn: {
-    paddingHorizontal: 14, paddingVertical: 7, borderRadius: 18,
-    backgroundColor: colors.surfaceContainerHigh, borderWidth: 1.5, borderColor: 'transparent'
-  },
-  knotActionBtnActive: { borderColor: '#FF6D00', backgroundColor: 'rgba(255,109,0,0.15)' },
-  knotActionText: { fontFamily: typography.fontFamily.semibold, fontSize: 12, color: colors.textSecondary },
-  knotActionTextActive: { color: '#FF6D00' },
-  knotTieBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 5,
-    paddingHorizontal: 16, paddingVertical: 7, borderRadius: 18,
-    backgroundColor: colors.surfaceContainerHighest
-  },
-  knotTieBtnReady: { backgroundColor: '#E65100' },
-  knotTieText: { fontFamily: typography.fontFamily.bold, fontSize: 12, color: colors.textSecondary },
-  knotTieTextReady: { color: '#FFF' },
-  knotUndoBtn: {
-    width: 32, height: 32, borderRadius: 16,
-    backgroundColor: colors.surfaceContainerHigh,
-    justifyContent: 'center', alignItems: 'center'
-  },
-  knotCountRow: {
-    flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 12,
-    marginBottom: 8
-  },
-  knotCountText: { fontFamily: typography.fontFamily.body, fontSize: 11, color: colors.textSecondary },
-  knotClearText: { fontFamily: typography.fontFamily.semibold, fontSize: 11, color: '#FF6D00' },
-  
-  // Background Knotting UI
-
-  knottingStatusRow: {
-    alignItems: 'center',
-    marginTop: 12,
-    marginBottom: 4,
-    height: 40,
-    justifyContent: 'center',
-    zIndex: 30, // Higher than seekbar to ensure clickability
-  },
-  statusLoadingRow: {
+  safe: { flex: 1, backgroundColor: colors.background },
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    backgroundColor: '#000',
-    paddingHorizontal: 16,
-    paddingVertical: 6,
-    borderRadius: 4,
-    borderWidth: 1,
-    borderColor: '#FF6D00',
-    minWidth: '80%',
-    justifyContent: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
   },
-  orangeDot: {
+  iconBtn: { padding: spacing.xs },
+  headerTitleWrap: { alignItems: 'center', flex: 1, paddingHorizontal: spacing.sm },
+  headerKicker: {
+    fontFamily: typography.fontFamily.bold,
+    fontSize: 9,
+    color: colors.primary,
+    letterSpacing: 1.5,
+    marginBottom: 2,
+  },
+  headerTitle: {
+    fontFamily: typography.fontFamily.bold,
+    fontSize: typography.size.sm,
+    color: colors.text,
+  },
+  scrollContent: {
+    paddingHorizontal: spacing.xl,
+    alignItems: 'center',
+  },
+  artContainer: {
+    marginTop: spacing.sm,
+    marginBottom: spacing.md,
+    shadowColor: colors.primary,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.15,
+    shadowRadius: 16,
+    elevation: 8,
+  },
+  art: { borderRadius: borderRadius.xxl, backgroundColor: colors.surfaceContainerLow },
+  lyricsPreviewCard: {
+    width: '100%',
+    backgroundColor: colors.surfaceContainerLow,
+    borderRadius: borderRadius.xl,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.surfaceContainerHigh,
+    overflow: 'hidden',
+  },
+  lyricsHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing.xs,
+  },
+  lyricsHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  lyricsLiveDot: {
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: '#FF6D00'
+    backgroundColor: colors.primary,
   },
-  statusText: {
+  lyricsHeaderTitle: {
     fontFamily: typography.fontFamily.bold,
-    fontSize: 10,
-    color: '#FF6D00',
+    fontSize: 9,
+    color: colors.primary,
     letterSpacing: 1,
-    textTransform: 'uppercase'
   },
-  applyKnotsBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: '#E65100',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
-    elevation: 4,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
-  },
-  applyKnotsText: {
-    fontFamily: typography.fontFamily.bold,
+  lyricsHeaderTapHint: {
+    fontFamily: typography.fontFamily.medium,
     fontSize: 10,
-    color: '#FFF'
-  }
-});
-
-const styles = StyleSheet.create({
-  cycleBtn: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
+    color: colors.textSecondary,
+  },
+  lyricsTeleprompterWrap: {
+    height: 70, // Exactly accommodates 3 teleprompter lines smoothly
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: 'transparent',
-    borderWidth: 1.5,
-    borderColor: 'transparent',
+    overflow: 'hidden',
   },
-  cycleBtnActive: {
-    transform: [{ scale: 1.12 }],
-    backgroundColor: 'rgba(255, 109, 0, 0.25)',
-    borderColor: '#FF6D00',
-    borderWidth: 2,
+  lyricsLineBox: {
+    height: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: '100%',
   },
-  cycleBadge: {
-    position: 'absolute',
-    color: '#FF6D00',
-    fontSize: 9,
-    fontWeight: 'bold',
-    bottom: 10,
-    right: 10,
-    backgroundColor: colors.background,
-    borderRadius: 5,
-    paddingHorizontal: 2.5,
+  lyricsLineText: {
+    fontFamily: typography.fontFamily.semibold,
+    textAlign: 'center',
+  },
+  lyricsLineTextActive: {
+    fontSize: typography.size.sm,
+    color: colors.text,
+    fontFamily: typography.fontFamily.bold,
+  },
+  lyricsLineTextNear: {
+    fontSize: typography.size.xs,
+    color: colors.textSecondary,
+    opacity: 0.7,
+  },
+  lyricsLineTextFar: {
+    fontSize: typography.size.xs,
+    color: colors.outline,
+    opacity: 0.3,
+  },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    width: '100%',
+    marginVertical: spacing.sm,
+  },
+  titleWrap: { flex: 1, marginRight: spacing.md },
+  songTitle: {
+    fontFamily: typography.fontFamily.bold,
+    fontSize: typography.size.xl,
+    color: colors.text,
+    marginBottom: 2,
+  },
+  artistName: {
+    fontFamily: typography.fontFamily.medium,
+    fontSize: typography.size.sm,
+    color: colors.textSecondary,
+  },
+  titleActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  heartBtn: { padding: spacing.xs },
+  ropeSeekbarWrapper: {
+    width: '100%',
+    marginVertical: spacing.sm,
+  },
+  knotBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    width: '100%',
+    marginVertical: spacing.sm,
+  },
+  knotActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 6,
+    borderRadius: borderRadius.full,
+    backgroundColor: colors.surfaceContainerLow,
     borderWidth: 1,
-    borderColor: 'rgba(255, 109, 0, 0.3)',
+    borderColor: colors.surfaceContainerHigh,
+  },
+  activeAbBtn: {
+    backgroundColor: colors.primaryContainer,
+    borderColor: colors.primary,
+  },
+  knotActionText: {
+    fontFamily: typography.fontFamily.semibold,
+    fontSize: typography.size.xs,
+    color: colors.primary,
+  },
+  abText: {
+    fontFamily: typography.fontFamily.semibold,
+    fontSize: typography.size.xs,
+    color: colors.text,
+  },
+  abTextActive: {
+    fontFamily: typography.fontFamily.bold,
+    fontSize: typography.size.xs,
+    color: colors.onPrimaryContainer,
+  },
+  autoKnotBtn: {
+    paddingHorizontal: 0,
+    paddingVertical: 0,
+    overflow: 'hidden',
+    borderWidth: 0,
+  },
+  autoKnotGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+  },
+  autoKnotText: {
+    fontFamily: typography.fontFamily.bold,
+    fontSize: typography.size.xs,
+    color: colors.onPrimary,
+  },
+  autoKnotPreviewBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    width: '100%',
+    backgroundColor: colors.surfaceContainerLow,
+    padding: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    borderRadius: borderRadius.full,
+  },
+  autoKnotPreviewText: {
+    fontFamily: typography.fontFamily.semibold,
+    fontSize: typography.size.xs,
+    color: colors.text,
+  },
+  acceptBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: colors.primary,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+    borderRadius: borderRadius.full,
+  },
+  acceptBtnText: {
+    fontFamily: typography.fontFamily.bold,
+    fontSize: typography.size.xs,
+    color: colors.onPrimary,
+  },
+  discardBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: colors.surfaceContainerHigh,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 6,
+    borderRadius: borderRadius.full,
+  },
+  discardBtnText: {
+    fontFamily: typography.fontFamily.semibold,
+    fontSize: typography.size.xs,
+    color: colors.text,
+  },
+  activeKnotsContainer: {
+    width: '100%',
+    marginVertical: spacing.sm,
+  },
+  knotsHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: spacing.xs,
+  },
+  activeKnotsTitle: {
+    fontFamily: typography.fontFamily.bold,
+    fontSize: 9,
+    color: colors.textSecondary,
+    letterSpacing: 1,
+  },
+  clearAllKnotsText: {
+    fontFamily: typography.fontFamily.semibold,
+    fontSize: 10,
+    color: colors.primary,
+  },
+  knotsPillScroll: {
+    flexDirection: 'row',
+    gap: spacing.xs,
+  },
+  knotPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: colors.surfaceContainerLow,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    borderRadius: borderRadius.full,
+    borderWidth: 1,
+    borderColor: colors.primary,
+  },
+  inactiveKnotPill: {
+    borderColor: colors.surfaceContainerHigh,
+    backgroundColor: colors.background,
+  },
+  knotColorDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.primary,
+  },
+  inactiveColorDot: {
+    backgroundColor: colors.textSecondary,
+  },
+  knotPillText: {
+    fontFamily: typography.fontFamily.semibold,
+    fontSize: 11,
+    color: colors.text,
+  },
+  inactivePillText: {
+    color: colors.textSecondary,
+  },
+  deleteKnotBtn: {
+    padding: 2,
+    marginLeft: 2,
+  },
+  controlsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    width: '100%',
+    marginVertical: spacing.md,
+    paddingHorizontal: spacing.sm,
+  },
+  modeBtn: { padding: spacing.xs },
+  skipBtn: { padding: spacing.sm },
+  playBtn: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: colors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  aiStatusCard: {
+    width: '100%',
+    backgroundColor: colors.surfaceContainerLow,
+    padding: spacing.md,
+    borderRadius: borderRadius.lg,
+    marginTop: spacing.sm,
+  },
+  aiStatusHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    marginBottom: spacing.xs,
+  },
+  aiStatusTitle: {
+    fontFamily: typography.fontFamily.semibold,
+    fontSize: typography.size.xs,
+    color: colors.text,
+  },
+  progressBarTrack: {
+    height: 4,
+    backgroundColor: colors.surfaceContainerHigh,
+    borderRadius: borderRadius.full,
+    overflow: 'hidden',
+  },
+  progressBarFill: {
+    height: '100%',
+    backgroundColor: colors.primary,
+    borderRadius: borderRadius.full,
+  },
+  modalOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'flex-end',
+    zIndex: 100,
+  },
+  versionSheet: {
+    backgroundColor: colors.surfaceContainerLow,
+    borderTopLeftRadius: borderRadius.xxl,
+    borderTopRightRadius: borderRadius.xxl,
+    padding: spacing.xl,
+    paddingBottom: spacing.xxl,
+  },
+  versionSheetHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: spacing.xs,
+  },
+  versionSheetTitle: {
+    fontFamily: typography.fontFamily.bold,
+    fontSize: typography.size.lg,
+    color: colors.text,
+  },
+  closeSheetBtn: { padding: spacing.xs },
+  versionSheetSub: {
+    fontFamily: typography.fontFamily.body,
+    fontSize: typography.size.xs,
+    color: colors.textSecondary,
+    marginBottom: spacing.md,
+  },
+  versionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: borderRadius.lg,
+    backgroundColor: colors.background,
+    marginBottom: spacing.xs,
+  },
+  activeVersionRow: {
+    backgroundColor: colors.primaryContainer,
+    borderWidth: 1,
+    borderColor: colors.primary,
+  },
+  versionInfoBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    gap: spacing.md,
+  },
+  versionCheckDot: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: colors.textSecondary,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  activeCheckDot: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  versionNameText: {
+    fontFamily: typography.fontFamily.bold,
+    fontSize: typography.size.sm,
+    color: colors.text,
+  },
+  activeVersionNameText: {
+    color: colors.onPrimaryContainer,
+  },
+  versionMetaText: {
+    fontFamily: typography.fontFamily.body,
+    fontSize: typography.size.xs,
+    color: colors.textSecondary,
+  },
+  renameInput: {
+    fontFamily: typography.fontFamily.bold,
+    fontSize: typography.size.sm,
+    color: colors.text,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.primary,
+    paddingVertical: 2,
+    minWidth: 120,
+  },
+  versionActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  versionActionIcon: {
+    padding: spacing.xs,
+  },
+  createNewVerBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+    paddingVertical: spacing.md,
+    borderRadius: borderRadius.lg,
+    backgroundColor: colors.surfaceContainerHigh,
+    marginTop: spacing.md,
+  },
+  createNewVerBtnText: {
+    fontFamily: typography.fontFamily.bold,
+    fontSize: typography.size.sm,
+    color: colors.primary,
+  },
+  newVerPromptCard: {
+    backgroundColor: colors.surfaceContainerLow,
+    borderRadius: borderRadius.xxl,
+    padding: spacing.xl,
+    marginHorizontal: spacing.xl,
+    marginBottom: 'auto',
+    marginTop: 'auto',
+  },
+  promptTitle: {
+    fontFamily: typography.fontFamily.bold,
+    fontSize: typography.size.lg,
+    color: colors.text,
+    marginBottom: 4,
+  },
+  promptSub: {
+    fontFamily: typography.fontFamily.body,
+    fontSize: typography.size.xs,
+    color: colors.textSecondary,
+    marginBottom: spacing.md,
+  },
+  promptInput: {
+    backgroundColor: colors.background,
+    borderRadius: borderRadius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    fontFamily: typography.fontFamily.semibold,
+    fontSize: typography.size.sm,
+    color: colors.text,
+    marginBottom: spacing.lg,
+  },
+  promptActionGrid: {
+    flexDirection: 'row',
+    gap: spacing.md,
+  },
+  promptBtnSecondary: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: spacing.sm,
+    borderRadius: borderRadius.md,
+    backgroundColor: colors.surfaceContainerHigh,
+  },
+  promptBtnSecondaryText: {
+    fontFamily: typography.fontFamily.bold,
+    fontSize: typography.size.xs,
+    color: colors.text,
+  },
+  promptBtnPrimary: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: spacing.sm,
+    borderRadius: borderRadius.md,
+    backgroundColor: colors.primary,
+  },
+  promptBtnPrimaryText: {
+    fontFamily: typography.fontFamily.bold,
+    fontSize: typography.size.xs,
+    color: colors.onPrimary,
   },
 });

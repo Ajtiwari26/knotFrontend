@@ -233,29 +233,8 @@ export class KnotService {
         }
       }
 
-      // Fallback 2: match by title & artist
-      if (!savedKnot) {
-        const details = await this.getAllKnottedDetails();
-        for (const item of details) {
-          let itemTitle = item.knot.title || '';
-          let itemArtist = item.knot.artist || '';
-          if (!itemTitle) {
-            const lastSegment = item.key.split('/').pop() || '';
-            itemTitle = lastSegment.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ');
-          }
-          
-          if (this.isTitleMatch(track.title, itemTitle) && this.isArtistMatch(track.artist, itemArtist)) {
-            savedKnot = item.knot;
-            // Associate this knot with the current track's songKey to make subsequent loads instant
-            await this.saveKnot(songKey, {
-              ...savedKnot,
-              title: track.title,
-              artist: track.artist,
-            });
-            break;
-          }
-        }
-      }
+      // Fallback 2 (fuzzy title/artist matching) REMOVED — it caused knot
+      // cross-contamination between songs with similar names.
 
       // Fallback 3: try fetching from backend
       if (!savedKnot && track.source === 'local' && track.filename) {
@@ -271,7 +250,7 @@ export class KnotService {
         const processedKnots = savedKnot.junctions.map(j => ({
           startTime: j.start_ms / 1000,
           endTime: j.end_ms / 1000,
-          active: true
+          active: j.active !== false
         }));
         store.setKnots(processedKnots);
         return processedKnots;
@@ -311,53 +290,14 @@ export class KnotService {
         }
       }
 
-      // Fallback 2: Title & artist match if current track title is known
-      if (!savedKnot && (id.startsWith('file://') || id.startsWith('content://') || id.includes('/'))) {
-        let trackTitle = '';
-        let trackArtist = '';
-        try {
-          const { usePlayerStore } = require('../store/playerStore');
-          const currentTrack = usePlayerStore.getState().currentTrack;
-          if (currentTrack) {
-            const trackId = currentTrack.local_uri || currentTrack.youtube_id || currentTrack.pagalworld_url || currentTrack.pagalfree_url || currentTrack.jiosaavn_token;
-            if (trackId === id) {
-              trackTitle = currentTrack.title;
-              trackArtist = currentTrack.artist;
-            }
-          }
-        } catch (e) {
-          // Ignored
-        }
-
-        if (trackTitle) {
-          const details = await this.getAllKnottedDetails();
-          for (const item of details) {
-            let itemTitle = item.knot.title || '';
-            let itemArtist = item.knot.artist || '';
-            if (!itemTitle) {
-              const lastSegment = item.key.split('/').pop() || '';
-              itemTitle = lastSegment.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ');
-            }
-            
-            if (this.isTitleMatch(trackTitle, itemTitle) && this.isArtistMatch(trackArtist, itemArtist)) {
-              savedKnot = item.knot;
-              // Cache it for this ID to make subsequent loads instant
-              await this.saveKnot(id, {
-                ...savedKnot,
-                title: trackTitle,
-                artist: trackArtist,
-              });
-              break;
-            }
-          }
-        }
-      }
+      // Fallback 2 (fuzzy title/artist matching) REMOVED — it caused knot
+      // cross-contamination between songs with similar names.
 
       if (savedKnot) {
         return savedKnot.junctions.map(j => ({
           startTime: j.start_ms / 1000,
           endTime: j.end_ms / 1000,
-          active: true
+          active: j.active !== false
         }));
       }
       return [];
@@ -410,16 +350,146 @@ export class KnotService {
   }
 
   /**
-   * Resolve knots for a track, fetching from storage if needed.
+   * Infer source type from a knot storage key (used during sync).
    */
-  static async getKnotsForTrack(track: Track): Promise<any[]> {
-    let id = '';
-    if (track.source === 'local') id = track.local_uri || '';
-    else if (track.source === 'youtube') id = track.youtube_id || '';
-    else if (track.source === 'pagalworld') id = track.pagalworld_url || '';
-    else if (track.source === 'pagalfree') id = track.pagalfree_url || '';
-    else if (track.source === 'jiosaavn') id = track.jiosaavn_token || '';
-    
-    return this.getKnotsForId(id);
+  private static inferSourceType(key: string): string {
+    if (/^[a-zA-Z0-9_-]{11}$/.test(key)) return 'youtube';
+    if (key.includes('pagalworld') || key.includes('pagalsong')) return 'pagalworld';
+    if (key.includes('pagalfree')) return 'pagalfree';
+    if (key.startsWith('file://') || key.startsWith('content://') || key.includes('/')) return 'local';
+    if (!key.includes('/') && !key.includes('.') && key.length > 3) return 'jiosaavn';
+    return 'youtube';
+  }
+
+  /**
+   * Push all AsyncStorage knots to backend for authenticated user.
+   */
+  static async syncAllKnotsToBackend(): Promise<number> {
+    try {
+      const authData = await AsyncStorage.getItem('knot-auth-storage');
+      let token: string | null = null;
+      if (authData) {
+        try {
+          const parsed = JSON.parse(authData);
+          token = parsed?.state?.token || null;
+        } catch {
+          token = null;
+        }
+      }
+
+      if (!token) {
+        console.log('[KnotService] No auth token — skipping mobile sync to backend');
+        return 0;
+      }
+
+      const allDetails = await this.getAllKnottedDetails();
+      if (allDetails.length === 0) return 0;
+
+      const knots = allDetails.map((item) => ({
+        source_key: item.key,
+        source_type: item.knot.source || this.inferSourceType(item.key),
+        title: item.knot.title || '',
+        artist: item.knot.artist || '',
+        thumbnail: '', // Don't sync thumbnails — derive from source
+        duration_ms: item.knot.original_duration_ms || 0,
+        junctions: item.knot.junctions,
+        knot_name: item.knot.name || 'My Knot',
+        updated_at: item.createdAt,
+      }));
+
+      const baseUrl = getBaseUrl();
+      const res = await fetch(`${baseUrl}/api/songs/sync-knots`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ knots }),
+      });
+
+      if (!res.ok) {
+        console.warn('[KnotService] Mobile sync to backend failed:', res.status);
+        return 0;
+      }
+
+      const data = await res.json();
+      console.log(`[KnotService] Mobile synced ${data.synced} knots to backend`);
+      return data.synced;
+    } catch (error) {
+      console.warn('[KnotService] syncAllKnotsToBackend error:', error);
+      return 0;
+    }
+  }
+
+  /**
+   * Pull all knots from backend for authenticated user and merge into AsyncStorage.
+   */
+  static async pullKnotsFromBackend(): Promise<number> {
+    try {
+      const authData = await AsyncStorage.getItem('knot-auth-storage');
+      let token: string | null = null;
+      if (authData) {
+        try {
+          const parsed = JSON.parse(authData);
+          token = parsed?.state?.token || null;
+        } catch {
+          token = null;
+        }
+      }
+
+      if (!token) {
+        console.log('[KnotService] No auth token — skipping mobile pull from backend');
+        return 0;
+      }
+
+      const baseUrl = getBaseUrl();
+      const res = await fetch(`${baseUrl}/api/songs/my-knots`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (!res.ok) {
+        console.warn('[KnotService] Mobile pull from backend failed:', res.status);
+        return 0;
+      }
+
+      const serverKnots: {
+        source_key: string;
+        source_type: string;
+        title: string;
+        artist: string;
+        duration_ms: number;
+        junctions: { start_ms: number; end_ms: number; active?: boolean }[];
+        knot_name: string;
+        updated_at: string;
+      }[] = await res.json();
+
+      let pulled = 0;
+      for (const sk of serverKnots) {
+        if (!sk.source_key || !sk.junctions || sk.junctions.length === 0) continue;
+
+        const existingLocal = await this.getSavedKnot(sk.source_key);
+        const serverTime = sk.updated_at ? new Date(sk.updated_at).getTime() : 0;
+        const localTime = existingLocal?.createdAt || 0;
+
+        if (!existingLocal || serverTime > localTime) {
+          await this.saveKnot(sk.source_key, {
+            _id: sk.source_key,
+            name: sk.knot_name || 'My Knot',
+            junctions: sk.junctions,
+            knotted_duration_ms: 0,
+            original_duration_ms: sk.duration_ms || 0,
+            title: sk.title,
+            artist: sk.artist,
+          });
+          pulled++;
+        }
+      }
+
+      console.log(`[KnotService] Mobile pulled ${pulled} knots from backend`);
+      return pulled;
+    } catch (error) {
+      console.warn('[KnotService] pullKnotsFromBackend error:', error);
+      return 0;
+    }
   }
 }

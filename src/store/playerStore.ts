@@ -6,11 +6,13 @@ export interface Junction {
   start_ms: number;
   end_ms: number;
   label?: string;
+  active?: boolean;
 }
 
 export interface Track {
   youtube_id?: string;       // present for YouTube songs
   local_uri?: string;        // file:// URI for device songs
+  uri?: string;              // general/fallback URI
   filename?: string;         // stable filename for knot matching
   pagalworld_url?: string;   // Pagalworld detail page URL
   pagalworld_metadata?: { year: string; month: string; file: string };
@@ -26,6 +28,12 @@ export interface Track {
   streamUrl?: string;
 }
 
+export interface KnotVersion {
+  id: string;
+  name: string;
+  junctions: Junction[];
+}
+
 export interface ActiveKnot {
   _id: string;
   name: string;
@@ -34,6 +42,11 @@ export interface ActiveKnot {
   original_duration_ms: number;
   title?: string;
   artist?: string;
+  thumbnail?: string;
+  source?: 'youtube' | 'local' | 'pagalworld' | 'pagalfree' | 'jiosaavn';
+  activeVersionId?: string;
+  versions?: KnotVersion[];
+  createdAt?: number;
 }
 
 export interface Knot {
@@ -58,6 +71,8 @@ interface PlayerState {
   pendingKnots: Knot[] | null;
   
   downloadProgress: { [songKey: string]: number };
+  lyricOffsets: Record<string, number>;
+  setLyricOffset: (trackKey: string, offsetMs: number) => void;
   setDownloadProgress: (songKey: string, progress: number) => void;
   cyclePlaybackMode: () => void;
   setCurrentTrack: (track: Track | null) => void;
@@ -92,8 +107,29 @@ export const usePlayerStore = create<PlayerState>()(
       knottingPhase: '',
       pendingKnots: null,
       downloadProgress: {},
+      lyricOffsets: {},
       
-      setCurrentTrack: (track) => set({ currentTrack: track }),
+      setLyricOffset: (trackKey, offsetMs) => set((state) => ({
+        lyricOffsets: {
+          ...state.lyricOffsets,
+          [trackKey]: offsetMs
+        }
+      })),
+      
+      setCurrentTrack: (track) => set((state) => {
+        // Only clear knots/activeKnot if the track ID/URI is actually changing, to avoid clearing during enrichment!
+        const isSameTrack = state.currentTrack && track && (
+          (state.currentTrack.youtube_id && state.currentTrack.youtube_id === track.youtube_id) ||
+          (state.currentTrack.local_uri && state.currentTrack.local_uri === track.local_uri) ||
+          (state.currentTrack.pagalworld_url && state.currentTrack.pagalworld_url === track.pagalworld_url) ||
+          (state.currentTrack.pagalfree_url && state.currentTrack.pagalfree_url === track.pagalfree_url) ||
+          (state.currentTrack.jiosaavn_token && state.currentTrack.jiosaavn_token === track.jiosaavn_token)
+        );
+        if (isSameTrack) {
+          return { currentTrack: track };
+        }
+        return { currentTrack: track, activeKnot: null, knots: [] };
+      }),
       setActiveKnot: (knot) => set({ activeKnot: knot }),
       setKnots: (updater) => set((state) => ({
         knots: typeof updater === 'function' ? updater(state.knots) : updater
@@ -169,12 +205,12 @@ export const usePlayerStore = create<PlayerState>()(
           if (repeatMode === 'list' || repeatMode === 'track') {
             nextIndex = 0;
           } else {
-            set({ currentTrack: null, isPlaying: false });
+            set({ currentTrack: null, activeKnot: null, knots: [], isPlaying: false });
             return;
           }
         }
         
-        set({ currentIndex: nextIndex, currentTrack: queue[nextIndex] });
+        set({ currentIndex: nextIndex, currentTrack: queue[nextIndex], activeKnot: null, knots: [] });
       },
       
       prevTrack: () => {
@@ -190,7 +226,7 @@ export const usePlayerStore = create<PlayerState>()(
           }
         }
         
-        set({ currentIndex: prevIndex, currentTrack: queue[prevIndex] });
+        set({ currentIndex: prevIndex, currentTrack: queue[prevIndex], activeKnot: null, knots: [] });
       },
       
       reset: () => set({ 
@@ -207,8 +243,10 @@ export const usePlayerStore = create<PlayerState>()(
         repeatMode: state.repeatMode, 
         shuffle: state.shuffle,
         currentTrack: state.currentTrack,
-        knots: state.knots,
-        isPlaying: state.isPlaying
+        // NOTE: `knots` and `isPlaying` intentionally NOT persisted — knots are
+        // loaded fresh via loadKnotsForTrack() each time a track plays. Persisting
+        // them caused stale knots from a previous song to bleed into the next.
+        lyricOffsets: state.lyricOffsets
       }),
     }
   )
