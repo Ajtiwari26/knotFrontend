@@ -65,7 +65,10 @@ export default function SearchScreen() {
   const [pagalworldResults, setPagalworldResults] = useState<any[]>([]);
   const [pagalfreeResults, setPagalfreeResults] = useState<any[]>([]);
   const [jiosaavnResults, setJiosaavnResults] = useState<any[]>([]);
-  
+  const [albumResults, setAlbumResults] = useState<any[]>([]);
+  const [artistResults, setArtistResults] = useState<any[]>([]);
+  const [resultFilter, setResultFilter] = useState<'all' | 'songs' | 'albums' | 'artists'>('all');
+
   const [loadingYoutube, setLoadingYoutube] = useState(false);
   const [loadingPagalworld, setLoadingPagalworld] = useState(false);
   const [loadingPagalfree, setLoadingPagalfree] = useState(false);
@@ -132,6 +135,8 @@ export default function SearchScreen() {
       setPagalworldResults([]);
       setPagalfreeResults([]);
       setJiosaavnResults([]);
+      setAlbumResults([]);
+      setArtistResults([]);
       setLoadingYoutube(false);
       setLoadingPagalworld(false);
       setLoadingPagalfree(false);
@@ -152,6 +157,8 @@ export default function SearchScreen() {
       setPagalworldResults([]);
       setPagalfreeResults([]);
       setJiosaavnResults([]);
+      setAlbumResults([]);
+      setArtistResults([]);
       setLoadingYoutube(false);
       setLoadingPagalworld(false);
       setLoadingPagalfree(false);
@@ -218,6 +225,8 @@ export default function SearchScreen() {
       setPagalworldResults([]);
       setPagalfreeResults([]);
       setJiosaavnResults([]);
+      setAlbumResults([]);
+      setArtistResults([]);
 
       setLoadingYoutube(true);
       setLoadingPagalworld(true);
@@ -275,9 +284,11 @@ export default function SearchScreen() {
       const fetchJiosaavn = async () => {
         try {
           const JiosaavnService = require('@/src/services/JiosaavnService').default;
-          const results = await JiosaavnService.search(trimmed);
+          const results = await JiosaavnService.searchAll(trimmed);
           if (latestQuery.current !== trimmed) return;
-          setJiosaavnResults(results || []);
+          setJiosaavnResults(results.songs || []);
+          setAlbumResults(results.albums || []);
+          setArtistResults(results.artists || []);
         } catch (e) {
           console.warn('[Search] JioSaavn search failed', e);
         } finally {
@@ -571,8 +582,59 @@ export default function SearchScreen() {
 
             {searchMode === 'online' && (
               <>
+                {/* Result type filter */}
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.chips} contentContainerStyle={s.chipsPad}>
+                  {(['all', 'songs', 'albums', 'artists'] as const).map(f => (
+                    <Chip
+                      key={f}
+                      label={f.charAt(0).toUpperCase() + f.slice(1)}
+                      active={resultFilter === f}
+                      onPress={() => setResultFilter(f)}
+                    />
+                  ))}
+                </ScrollView>
+
+                {/* Artists */}
+                {(resultFilter === 'all' || resultFilter === 'artists') && artistResults.length > 0 && (
+                  <View style={s.section}>
+                    <Text style={s.sectionTitle}>Artists</Text>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                      {artistResults.map((a, i) => (
+                        <TouchableOpacity
+                          key={`ar-${a.token || i}`}
+                          style={s.artistCard}
+                          onPress={() => router.push({ pathname: '/artist', params: { token: a.token } })}
+                        >
+                          <Image source={{ uri: a.imageUrl }} style={s.artistImg} />
+                          <Text style={s.artistName} numberOfLines={1}>{a.name}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                  </View>
+                )}
+
+                {/* Albums & Movie Soundtracks */}
+                {(resultFilter === 'all' || resultFilter === 'albums') && albumResults.length > 0 && (
+                  <View style={s.section}>
+                    <Text style={s.sectionTitle}>Albums & Movies</Text>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                      {albumResults.map((al, i) => (
+                        <TouchableOpacity
+                          key={`al-${al.token || i}`}
+                          style={s.albumCard}
+                          onPress={() => router.push({ pathname: '/album', params: { token: al.token } })}
+                        >
+                          <Image source={{ uri: al.imageUrl }} style={s.albumImg} />
+                          <Text style={s.albumTitle} numberOfLines={1}>{al.title}</Text>
+                          <Text style={s.albumSubtitle} numberOfLines={1}>{al.description || al.artist || 'Album'}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                  </View>
+                )}
+
                 {/* JioSaavn Results (Fastest response) */}
-                {(loadingJiosaavn || jiosaavnResults.length > 0) && (
+                {(resultFilter === 'all' || resultFilter === 'songs') && (loadingJiosaavn || jiosaavnResults.length > 0) && (
                   <View style={s.section}>
                     <View style={s.sectionHeaderRow}>
                       <Text style={s.sectionTitle}>JioSaavn Results</Text>
@@ -608,7 +670,7 @@ export default function SearchScreen() {
                 )}
 
                 {/* YouTube Results */}
-                {(loadingYoutube || onlineResults.length > 0) && (
+                {(resultFilter === 'all' || resultFilter === 'songs') && (loadingYoutube || onlineResults.length > 0) && (
                   <View style={s.section}>
                     <View style={s.sectionHeaderRow}>
                       <Text style={s.sectionTitle}>YouTube Results</Text>
@@ -636,7 +698,7 @@ export default function SearchScreen() {
                 )}
 
                 {/* Pagalworld Results */}
-                {(loadingPagalworld || pagalworldResults.length > 0) && (
+                {(resultFilter === 'all' || resultFilter === 'songs') && (loadingPagalworld || pagalworldResults.length > 0) && (
                   <View style={s.section}>
                     <View style={s.sectionHeaderRow}>
                       <Text style={s.sectionTitle}>Pagalworld Results</Text>
@@ -672,7 +734,7 @@ export default function SearchScreen() {
                 )}
 
                 {/* Pagalfree Results */}
-                {(loadingPagalfree || pagalfreeResults.length > 0) && (
+                {(resultFilter === 'all' || resultFilter === 'songs') && (loadingPagalfree || pagalfreeResults.length > 0) && (
                   <View style={s.section}>
                     <View style={s.sectionHeaderRow}>
                       <Text style={s.sectionTitle}>Pagalfree Results</Text>
@@ -711,7 +773,7 @@ export default function SearchScreen() {
 
             {!loading && query.trim().length > 0 && localResults.length === 0 && 
               ((searchMode === 'offline') || 
-               (searchMode === 'online' && onlineResults.length === 0 && pagalworldResults.length === 0 && pagalfreeResults.length === 0 && jiosaavnResults.length === 0)) && (
+               (searchMode === 'online' && onlineResults.length === 0 && pagalworldResults.length === 0 && pagalfreeResults.length === 0 && jiosaavnResults.length === 0 && albumResults.length === 0 && artistResults.length === 0)) && (
               <Text style={s.emptyText}>No results found for "{query}"</Text>
             )}
           </>
@@ -744,6 +806,10 @@ const s = StyleSheet.create({
   artistName: { fontFamily: typography.fontFamily.semibold, fontSize: typography.size.xs, color: colors.text, textAlign: 'center' },
 
   section: { marginBottom: spacing.xl },
+  albumCard: { width: 140, marginRight: spacing.lg },
+  albumImg: { width: 140, height: 140, borderRadius: borderRadius.lg, backgroundColor: colors.surfaceContainer, marginBottom: 8 },
+  albumTitle: { fontFamily: typography.fontFamily.semibold, fontSize: typography.size.sm, color: colors.text },
+  albumSubtitle: { fontFamily: typography.fontFamily.body, fontSize: typography.size.xs, color: colors.textSecondary },
   sectionTitle: { fontFamily: typography.fontFamily.bold, fontSize: typography.size.md, color: colors.text, marginBottom: spacing.md },
   sectionHeaderRow: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.md },
   emptyText: { fontFamily: typography.fontFamily.body, fontSize: typography.size.sm, color: colors.textSecondary, textAlign: 'center', marginTop: spacing.xl },
