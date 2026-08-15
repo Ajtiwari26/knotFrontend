@@ -28,6 +28,30 @@ export interface Track {
   streamUrl?: string;
 }
 
+/** Extract a clean 11-character YouTube video ID from a raw ID or any YouTube URL format. */
+export function extractYoutubeId(input: string | null | undefined): string | null {
+  if (!input) return null;
+  if (/^[a-zA-Z0-9_-]{11}$/.test(input)) return input;
+  const match = input.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([\w-]{11})/);
+  if (match && match[1]) return match[1];
+  return null;
+}
+
+/** Stable identity key for a track across sources. */
+export function trackKey(track: Track | null | undefined): string {
+  if (!track) return '';
+  const ytId = extractYoutubeId(track.youtube_id) || track.youtube_id;
+  return (
+    ytId ||
+    track.pagalworld_url ||
+    track.pagalfree_url ||
+    track.jiosaavn_token ||
+    track.local_uri ||
+    track.uri ||
+    ''
+  );
+}
+
 export interface KnotVersion {
   id: string;
   name: string;
@@ -241,7 +265,7 @@ export const usePlayerStore = create<PlayerState>()(
         queue: state.queue, 
         currentIndex: state.currentIndex, 
         repeatMode: state.repeatMode, 
-        shuffle: state.shuffle,
+        shuffle: state.shuffle, 
         currentTrack: state.currentTrack,
         // NOTE: `knots` and `isPlaying` intentionally NOT persisted — knots are
         // loaded fresh via loadKnotsForTrack() each time a track plays. Persisting

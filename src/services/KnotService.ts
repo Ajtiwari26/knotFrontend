@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { ActiveKnot, Track, Knot } from '../store/playerStore';
+import { ActiveKnot, Track, Knot, extractYoutubeId, trackKey } from '../store/playerStore';
 import { getBaseUrl } from '../config/api';
 
 const KNOT_STORAGE_PREFIX = 'knot_data_';
@@ -208,7 +208,7 @@ export class KnotService {
       
       let songKey = '';
       if (track.source === 'local') songKey = track.local_uri || '';
-      else if (track.source === 'youtube') songKey = track.youtube_id || '';
+      else if (track.source === 'youtube') songKey = extractYoutubeId(track.youtube_id) || track.youtube_id || '';
       else if (track.source === 'pagalworld') songKey = track.pagalworld_url || '';
       else if (track.source === 'pagalfree') songKey = track.pagalfree_url || '';
       else if (track.source === 'jiosaavn') songKey = track.jiosaavn_token || '';
@@ -220,6 +220,9 @@ export class KnotService {
       }
 
       let savedKnot = await this.getSavedKnot(songKey);
+      if (!savedKnot && track.source === 'youtube' && track.youtube_id && track.youtube_id !== songKey) {
+        savedKnot = await this.getSavedKnot(track.youtube_id);
+      }
 
       // Fallback 1: if local and no knot found by URI, try finding by filename
       if (!savedKnot && track.source === 'local' && track.filename) {
@@ -385,17 +388,24 @@ export class KnotService {
       const allDetails = await this.getAllKnottedDetails();
       if (allDetails.length === 0) return 0;
 
-      const knots = allDetails.map((item) => ({
-        source_key: item.key,
-        source_type: item.knot.source || this.inferSourceType(item.key),
-        title: item.knot.title || '',
-        artist: item.knot.artist || '',
-        thumbnail: '', // Don't sync thumbnails — derive from source
-        duration_ms: item.knot.original_duration_ms || 0,
-        junctions: item.knot.junctions,
-        knot_name: item.knot.name || 'My Knot',
-        updated_at: item.createdAt,
-      }));
+      const knots = allDetails.map((item) => {
+        const inferred = item.knot.source || this.inferSourceType(item.key);
+        const ytId = inferred === 'youtube' ? (extractYoutubeId(item.key) || extractYoutubeId(item.knot._id) || item.key) : undefined;
+        const cleanKey = (inferred === 'youtube' && ytId) ? ytId : item.key;
+        const cleanThumbnail = item.knot.thumbnail || (inferred === 'youtube' && cleanKey ? `https://i.ytimg.com/vi/${cleanKey}/hqdefault.jpg` : '');
+
+        return {
+          source_key: cleanKey,
+          source_type: inferred,
+          title: item.knot.title || '',
+          artist: item.knot.artist || '',
+          thumbnail: cleanThumbnail,
+          duration_ms: item.knot.original_duration_ms || 0,
+          junctions: item.knot.junctions,
+          knot_name: item.knot.name || 'My Knot',
+          updated_at: item.createdAt,
+        };
+      });
 
       const baseUrl = getBaseUrl();
       const res = await fetch(`${baseUrl}/api/songs/sync-knots`, {
@@ -457,6 +467,7 @@ export class KnotService {
         source_type: string;
         title: string;
         artist: string;
+        thumbnail?: string;
         duration_ms: number;
         junctions: { start_ms: number; end_ms: number; active?: boolean }[];
         knot_name: string;
@@ -467,19 +478,36 @@ export class KnotService {
       for (const sk of serverKnots) {
         if (!sk.source_key || !sk.junctions || sk.junctions.length === 0) continue;
 
-        const existingLocal = await this.getSavedKnot(sk.source_key);
+        const isYt = sk.source_type === 'youtube';
+        const ytId = isYt ? (extractYoutubeId(sk.source_key) || sk.source_key) : undefined;
+        const cleanKey = (isYt && ytId) ? ytId : sk.source_key;
+        const cleanThumb = sk.thumbnail || (isYt && cleanKey ? `https://i.ytimg.com/vi/${cleanKey}/hqdefault.jpg` : '');
+
+        const existingLocal = await this.getSavedKnot(cleanKey) || (cleanKey !== sk.source_key ? await this.getSavedKnot(sk.source_key) : null);
         const serverTime = sk.updated_at ? new Date(sk.updated_at).getTime() : 0;
         const localTime = existingLocal?.createdAt || 0;
 
         if (!existingLocal || serverTime > localTime) {
-          await this.saveKnot(sk.source_key, {
-            _id: sk.source_key,
+          await this.saveKnot(cleanKey, {
+            _id: cleanKey,
             name: sk.knot_name || 'My Knot',
             junctions: sk.junctions,
             knotted_duration_ms: 0,
             original_duration_ms: sk.duration_ms || 0,
             title: sk.title,
             artist: sk.artist,
+            thumbnail: cleanThumb,
+            source: sk.source_type as ActiveKnot['source'],
+          });
+          pulled++;
+        } else if (
+          (!existingLocal.thumbnail && cleanThumb) ||
+          (!existingLocal.source && sk.source_type)
+        ) {
+          await this.saveKnot(cleanKey, {
+            ...existingLocal,
+            thumbnail: existingLocal.thumbnail || cleanThumb,
+            source: existingLocal.source || (sk.source_type as ActiveKnot['source']),
           });
           pulled++;
         }

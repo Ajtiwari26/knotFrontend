@@ -318,7 +318,9 @@ export class AudioService {
     } else {
       let streamUrl = track.streamUrl;
       const { getBaseUrl } = require('@/src/config/api');
+      const { extractYoutubeId } = require('@/src/store/playerStore');
       const baseUrl = getBaseUrl();
+      const cleanYtId = extractYoutubeId(track.youtube_id) || track.youtube_id;
 
       if (!streamUrl) {
         const isLocal = baseUrl.includes('localhost') || baseUrl.includes('10.0.2.2');
@@ -326,8 +328,8 @@ export class AudioService {
         // 1. Try Client-Side Extraction (Residential IP)
         try {
           const { YoutubeExtractor } = require('./YoutubeExtractor');
-          console.log(`[AudioService] Attempting client-side extraction for ${track.youtube_id}...`);
-          streamUrl = await YoutubeExtractor.extract(track.youtube_id);
+          console.log(`[AudioService] Attempting client-side extraction for ${cleanYtId}...`);
+          streamUrl = await YoutubeExtractor.extract(cleanYtId);
         } catch (e) {
           console.warn('[AudioService] Client-side extraction failed:', e);
         }
@@ -339,13 +341,12 @@ export class AudioService {
           } else {
             console.log('[AudioService] Falling back to backend proxy (production mode)...');
           }
-          streamUrl = `${baseUrl}/api/songs/${track.youtube_id}/stream`;
+          streamUrl = `${baseUrl}/api/songs/${encodeURIComponent(cleanYtId)}/stream`;
         }
       }
-      
 
-
-      await this.playStream(streamUrl, track.title, track.artist, track.thumbnail, track.youtube_id);
+      const cleanThumb = track.thumbnail || (cleanYtId ? `https://i.ytimg.com/vi/${cleanYtId}/hqdefault.jpg` : '');
+      await this.playStream(streamUrl, track.title, track.artist, cleanThumb, cleanYtId);
     }
 
     if (seekToPosition !== null && seekToPosition > 0) {

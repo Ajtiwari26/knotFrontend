@@ -21,13 +21,14 @@ const { width } = Dimensions.get('window');
 
 interface KnottedSong {
   id: string;
+  key?: string;
   title: string;
   artist: string;
   thumbnail: string;
   knotName: string;
   duration: string;
   uri?: string;
-  source: 'local' | 'youtube';
+  source: 'local' | 'youtube' | 'pagalworld' | 'pagalfree' | 'jiosaavn';
   filename?: string;
   duration_ms: number;
   createdAt: number;
@@ -56,6 +57,7 @@ export default function HomeScreen() {
   const loadKnottedSongs = async () => {
     try {
       setLoading(true);
+      await KnotService.pullKnotsFromBackend();
 
       // 1. Load all local tracks from the device cache
       const { tracks: allLocal } = await LocalMusicService.getDeviceSongs(5000);
@@ -63,7 +65,7 @@ export default function HomeScreen() {
       // 2. Load all knotted details (sorted newest first)
       const details = await KnotService.getAllKnottedDetails();
 
-      // 3. Match details to local files
+      // 3. Match details to local files or online sources
       const matched: KnottedSong[] = [];
       const matchedFilenames = new Set<string>();
       for (const item of details) {
@@ -108,6 +110,7 @@ export default function HomeScreen() {
 
           matched.push({
             id: `${match.id}_${item.createdAt}`, // Make ID unique by combining with timestamp
+            key: uri,
             title: match.title,
             artist: match.artist,
             thumbnail: thumbnail,
@@ -120,6 +123,59 @@ export default function HomeScreen() {
             createdAt: item.createdAt,
             knotCount: item.knot.junctions?.length || 0,
           });
+        } else if (!match) {
+          // Streamed online track (YouTube, Pagalworld, Pagalfree, JioSaavn)
+          const { extractYoutubeId } = require('@/src/store/playerStore');
+          const ytId = extractYoutubeId(uri) || extractYoutubeId(item.knot._id);
+          let onlineSource: KnottedSong['source'] = 'youtube';
+          let isYoutube = false;
+
+          if (item.knot.source && item.knot.source !== 'local') {
+            onlineSource = item.knot.source;
+            isYoutube = onlineSource === 'youtube';
+          } else if (ytId || uri.includes('youtube') || uri.includes('youtu.be')) {
+            onlineSource = 'youtube';
+            isYoutube = true;
+          } else if (uri.includes('pagalworld') || uri.includes('pagalsong')) {
+            onlineSource = 'pagalworld';
+          } else if (uri.includes('pagalfree')) {
+            onlineSource = 'pagalfree';
+          } else {
+            onlineSource = 'jiosaavn';
+          }
+
+          const cleanYtId = ytId || (isYoutube ? uri : '');
+          let fallbackThumbnail = item.knot.thumbnail || '';
+          if (!fallbackThumbnail && isYoutube && cleanYtId) {
+            fallbackThumbnail = `https://i.ytimg.com/vi/${cleanYtId}/hqdefault.jpg`;
+          }
+
+          const fallbackTitle =
+            item.knot.title ||
+            (uri.includes('/') ? uri.split('/').pop()?.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ') : '') ||
+            'Unknown Title';
+          const fallbackArtist =
+            item.knot.artist ||
+            (onlineSource === 'youtube' ? 'YouTube Track' : onlineSource === 'jiosaavn' ? 'JioSaavn Track' : 'Online Track');
+
+          const effectiveKey = (isYoutube && cleanYtId) ? cleanYtId : uri;
+          if (!matchedFilenames.has(effectiveKey.toLowerCase())) {
+            matchedFilenames.add(effectiveKey.toLowerCase());
+            matched.push({
+              id: `${effectiveKey}_${item.createdAt}`,
+              key: effectiveKey,
+              title: fallbackTitle,
+              artist: fallbackArtist,
+              thumbnail: fallbackThumbnail,
+              knotName: `${item.knot.junctions?.length || 0} Knot${(item.knot.junctions?.length || 0) !== 1 ? 's' : ''}`,
+              duration: formatDuration(item.knot.original_duration_ms || 0),
+              uri: isYoutube ? undefined : uri,
+              source: onlineSource,
+              duration_ms: item.knot.original_duration_ms || 0,
+              createdAt: item.createdAt,
+              knotCount: item.knot.junctions?.length || 0,
+            });
+          }
         }
       }
 
@@ -131,33 +187,39 @@ export default function HomeScreen() {
     }
   };
 
+  const knottedToTrack = (t: KnottedSong): Track => {
+    const { extractYoutubeId } = require('@/src/store/playerStore');
+    const ytId = t.source === 'youtube' ? (extractYoutubeId(t.key || t.uri || t.id) || t.key || t.uri || t.id) : undefined;
+    return {
+      youtube_id: ytId,
+      jiosaavn_token: t.source === 'jiosaavn' ? (t.key || t.uri) : undefined,
+      pagalworld_url: t.source === 'pagalworld' ? (t.key || t.uri) : undefined,
+      pagalfree_url: t.source === 'pagalfree' ? (t.key || t.uri) : undefined,
+      source: t.source,
+      title: t.title,
+      artist: t.artist,
+      thumbnail: t.thumbnail || (ytId ? `https://i.ytimg.com/vi/${ytId}/hqdefault.jpg` : ''),
+      duration_ms: t.duration_ms,
+      local_uri: t.source === 'local' ? t.uri : undefined,
+      filename: t.filename,
+    };
+  };
+
   const handlePlay = async (track: KnottedSong, allTracks: KnottedSong[]) => {
     try {
-      const localTrack: Track = {
-        youtube_id: track.id || track.uri,
-        source: 'local' as const,
-        title: track.title,
-        artist: track.artist,
-        thumbnail: track.thumbnail,
-        duration_ms: track.duration_ms,
-        local_uri: track.uri,
-        filename: track.filename,
-      };
+      const currentTrack = knottedToTrack(track);
+      const queue: Track[] = allTracks.map(knottedToTrack);
 
-      const queue: Track[] = allTracks.map(t => ({
-        youtube_id: t.id || t.uri,
-        source: 'local' as const,
-        title: t.title,
-        artist: t.artist,
-        thumbnail: t.thumbnail,
-        duration_ms: t.duration_ms,
-        local_uri: t.uri,
-        filename: t.filename,
-      }));
+      const startIndex = queue.findIndex(q => {
+        if (q.youtube_id && currentTrack.youtube_id) return q.youtube_id === currentTrack.youtube_id;
+        if (q.jiosaavn_token && currentTrack.jiosaavn_token) return q.jiosaavn_token === currentTrack.jiosaavn_token;
+        if (q.pagalworld_url && currentTrack.pagalworld_url) return q.pagalworld_url === currentTrack.pagalworld_url;
+        if (q.pagalfree_url && currentTrack.pagalfree_url) return q.pagalfree_url === currentTrack.pagalfree_url;
+        return q.local_uri === currentTrack.local_uri;
+      });
 
-      const startIndex = queue.findIndex(q => (q.local_uri || q.youtube_id) === (localTrack.local_uri || localTrack.youtube_id));
       usePlayerStore.getState().setQueue(queue, startIndex >= 0 ? startIndex : 0);
-      await AudioService.playQueueTrack(localTrack);
+      await AudioService.playQueueTrack(currentTrack);
       router.push('/player');
     } catch (error) {
       console.error('[Home] Error playing track:', error);

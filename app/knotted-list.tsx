@@ -17,13 +17,14 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 interface KnottedSong {
   id: string;
+  key?: string;
   title: string;
   artist: string;
   thumbnail: string;
   knotName: string;
   duration: string;
   uri?: string;
-  source: 'local' | 'youtube';
+  source: 'local' | 'youtube' | 'pagalworld' | 'pagalfree' | 'jiosaavn';
   filename?: string;
   duration_ms: number;
   createdAt: number;
@@ -71,6 +72,7 @@ export default function KnottedListScreen() {
           matchedFilenames.add(match.filename.toLowerCase());
           localMatched.push({
             id: match.id,
+            key: uri,
             title: match.title,
             artist: match.artist,
             thumbnail: match.thumbnail || '',
@@ -90,7 +92,11 @@ export default function KnottedListScreen() {
       const onlineKeys = localKeys.filter(k => !k.startsWith('file://') && !k.startsWith('content://'));
       for (const key of onlineKeys) {
         try {
+          const knotData = await KnotService.getSavedKnot(key);
+          if (!knotData) continue;
+
           // Check if this online song was downloaded
+          let isDownloadedMatch = false;
           const downloadedData = await AsyncStorage.getItem(`downloaded_track_${key}`);
           if (downloadedData) {
             const downloaded = JSON.parse(downloadedData);
@@ -100,23 +106,79 @@ export default function KnottedListScreen() {
               const localMatch = allLocal.find(t => t.filename.toLowerCase() === downloadedFilename) 
                               || (downloaded.local_uri ? allLocal.find(t => t.uri === downloaded.local_uri) : null);
               if (localMatch) {
-                const knotData = await KnotService.getSavedKnot(key);
+                isDownloadedMatch = true;
                 matchedFilenames.add(localMatch.filename.toLowerCase());
                 localMatched.push({
                   id: localMatch.id,
+                  key: key,
                   title: localMatch.title,
                   artist: localMatch.artist,
                   thumbnail: localMatch.thumbnail || '',
-                  knotName: `${knotData?.junctions.length || 0} Knot${(knotData?.junctions.length || 0) !== 1 ? 's' : ''}`,
+                  knotName: `${knotData.junctions?.length || 0} Knot${(knotData.junctions?.length || 0) !== 1 ? 's' : ''}`,
                   duration: formatDuration(localMatch.duration_ms),
                   uri: localMatch.uri,
                   source: 'local',
                   filename: localMatch.filename,
                   duration_ms: localMatch.duration_ms,
                   createdAt: (knotData as any)?.createdAt || 0,
-                  knotCount: knotData?.junctions.length || 0,
+                  knotCount: knotData.junctions?.length || 0,
                 });
               }
+            }
+          }
+
+          // If not matched as a local download, include as an online streamed track
+          if (!isDownloadedMatch) {
+            const { extractYoutubeId } = require('@/src/store/playerStore');
+            const ytId = extractYoutubeId(key) || extractYoutubeId(knotData._id);
+            let onlineSource: KnottedSong['source'] = 'youtube';
+            let isYoutube = false;
+
+            if (knotData.source && knotData.source !== 'local') {
+              onlineSource = knotData.source;
+              isYoutube = onlineSource === 'youtube';
+            } else if (ytId || key.includes('youtube') || key.includes('youtu.be')) {
+              onlineSource = 'youtube';
+              isYoutube = true;
+            } else if (key.includes('pagalworld') || key.includes('pagalsong')) {
+              onlineSource = 'pagalworld';
+            } else if (key.includes('pagalfree')) {
+              onlineSource = 'pagalfree';
+            } else {
+              onlineSource = 'jiosaavn';
+            }
+
+            const cleanYtId = ytId || (isYoutube ? key : '');
+            let fallbackThumbnail = knotData.thumbnail || '';
+            if (!fallbackThumbnail && isYoutube && cleanYtId) {
+              fallbackThumbnail = `https://i.ytimg.com/vi/${cleanYtId}/hqdefault.jpg`;
+            }
+
+            const fallbackTitle =
+              knotData.title ||
+              (key.includes('/') ? key.split('/').pop()?.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ') : '') ||
+              'Unknown Title';
+            const fallbackArtist =
+              knotData.artist ||
+              (onlineSource === 'youtube' ? 'YouTube Track' : onlineSource === 'jiosaavn' ? 'JioSaavn Track' : 'Online Track');
+
+            const effectiveKey = (isYoutube && cleanYtId) ? cleanYtId : key;
+            if (!matchedFilenames.has(effectiveKey.toLowerCase())) {
+              matchedFilenames.add(effectiveKey.toLowerCase());
+              localMatched.push({
+                id: `${effectiveKey}_${(knotData as any)?.createdAt || 0}`,
+                key: effectiveKey,
+                title: fallbackTitle,
+                artist: fallbackArtist,
+                thumbnail: fallbackThumbnail,
+                knotName: `${knotData.junctions?.length || 0} Knot${(knotData.junctions?.length || 0) !== 1 ? 's' : ''}`,
+                duration: formatDuration(knotData.original_duration_ms || 0),
+                uri: isYoutube ? undefined : key,
+                source: onlineSource,
+                duration_ms: knotData.original_duration_ms || 0,
+                createdAt: (knotData as any)?.createdAt || 0,
+                knotCount: knotData.junctions?.length || 0,
+              });
             }
           }
         } catch (e) {
@@ -133,6 +195,7 @@ export default function KnottedListScreen() {
             matchedFilenames.add(remoteFilename);
             localMatched.push({
               id: localMatch.id,
+              key: remote.local_id,
               title: remote.title || localMatch.title,
               artist: remote.artist || localMatch.artist,
               thumbnail: localMatch.thumbnail || '',
@@ -159,21 +222,31 @@ export default function KnottedListScreen() {
     }
   };
 
+  const knottedToTrack = (t: KnottedSong): Track => {
+    const { extractYoutubeId } = require('@/src/store/playerStore');
+    const ytId = t.source === 'youtube' ? (extractYoutubeId(t.key || t.uri || t.id) || t.key || t.uri || t.id) : undefined;
+    return {
+      youtube_id: ytId,
+      jiosaavn_token: t.source === 'jiosaavn' ? (t.key || t.uri) : undefined,
+      pagalworld_url: t.source === 'pagalworld' ? (t.key || t.uri) : undefined,
+      pagalfree_url: t.source === 'pagalfree' ? (t.key || t.uri) : undefined,
+      source: t.source,
+      title: t.title,
+      artist: t.artist,
+      thumbnail: t.thumbnail || (ytId ? `https://i.ytimg.com/vi/${ytId}/hqdefault.jpg` : ''),
+      duration_ms: t.duration_ms,
+      local_uri: t.source === 'local' ? t.uri : undefined,
+      filename: t.filename,
+    };
+  };
+
   const handlePlay = async (track: KnottedSong, index: number) => {
     try {
-      const queue: Track[] = knotted.map(t => ({
-        youtube_id: t.id || t.uri,
-        source: t.source,
-        title: t.title,
-        artist: t.artist,
-        thumbnail: t.thumbnail,
-        duration_ms: t.duration_ms,
-        local_uri: t.uri,
-        filename: t.filename,
-      }));
+      const currentTrack = knottedToTrack(track);
+      const queue: Track[] = knotted.map(knottedToTrack);
 
       usePlayerStore.getState().setQueue(queue, index);
-      await AudioService.playQueueTrack(queue[index]);
+      await AudioService.playQueueTrack(currentTrack);
       router.push('/player');
     } catch (error) {
       console.error('[KnottedList] Error playing track:', error);
